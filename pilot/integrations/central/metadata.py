@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import os
 import urllib.request
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pilot.integrations.central.client import CentralClientError
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from pilot.config.bench import BenchConfig
     from pilot.core.bench import Bench
 
@@ -20,7 +22,7 @@ def attribute_name() -> str:
     return os.environ.get("PILOT_METADATA_KEY", "pilot-central")
 
 
-def _parse_credentials(raw: str, name: str) -> dict[str, str]:
+def _parse_credentials(raw: str, name: str) -> dict[str, Any]:
     """Anything rejected here is a provisioning bug, not a host still waiting."""
     from pilot.internal.validators import validate_external_url
 
@@ -35,9 +37,15 @@ def _parse_credentials(raw: str, name: str) -> dict[str, str]:
     if missing := [key for key in REQUIRED_KEYS if not payload.get(key)]:
         raise CentralClientError(f"{source} is missing: {', '.join(missing)}")
 
-    credentials = {key: str(payload[key]) for key in REQUIRED_KEYS}
+    credentials: dict[str, Any] = {key: str(payload[key]) for key in REQUIRED_KEYS}
     if error := validate_external_url(credentials["central_endpoint"], "central_endpoint"):
         raise CentralClientError(f"{source}: {error}")
+
+    initial_jwks_cache = payload.get("initial_jwks_cache")
+    if initial_jwks_cache is not None:
+        if not isinstance(initial_jwks_cache, dict):
+            raise CentralClientError(f"{source}: initial_jwks_cache is not a JSON object.")
+        credentials["initial_jwks_cache"] = initial_jwks_cache
 
     return credentials
 
@@ -49,7 +57,7 @@ class InstanceMetadata:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
-    def get_credentials(self) -> dict[str, str] | None:
+    def get_credentials(self) -> dict[str, Any] | None:
         """The staged credential, or None until the cloud writes it. Malformed raises."""
         name = attribute_name()
         raw = self.get_attribute(name)
@@ -81,14 +89,25 @@ class InstanceMetadata:
             return None
 
 
-def apply_central_config(bench: "Bench", metadata: InstanceMetadata | None = None) -> bool:
-    """Mark this host bootstrapped and save its JWKS issuer. False means retry later."""
+def apply_central_config(
+    bench: "Bench",
+    metadata: InstanceMetadata | None = None,
+    on_credentials: Callable[[dict[str, Any]], None] | None = None,
+) -> bool:
+    """Mark this host bootstrapped and save its JWKS issuer. False means retry later.
+
+    ``on_credentials`` runs before the host reads as bootstrapped, so work the first
+    remote token needs, such as storing the issuer's keys, is already done.
+    """
     if not bench.config.central.is_awaiting_bootstrap:
         return False
 
     credentials = (metadata or InstanceMetadata()).get_credentials()
     if credentials is None:
         return False
+
+    if on_credentials is not None:
+        on_credentials(credentials)
 
     from pilot.config.common import CommonConfig
 
@@ -106,7 +125,7 @@ def apply_central_config(bench: "Bench", metadata: InstanceMetadata | None = Non
     return True
 
 
-def _mark_bootstrapped(config: "BenchConfig", credentials: dict[str, str]) -> None:
+def _mark_bootstrapped(config: "BenchConfig", credentials: dict[str, Any]) -> None:
     """Bring the config already in memory up to date with what was just saved."""
     config.central.bootstrapped = True
     config.admin.jwks_url = credentials["jwks_url"]

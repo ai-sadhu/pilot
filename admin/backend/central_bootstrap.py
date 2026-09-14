@@ -38,10 +38,18 @@ class CentralBootstrapWatcher:
 
         try:
             config = BenchConfig.read(self.bench_root, validate=False)
-            return apply_central_config(Bench(config, self.bench_root))
+            return apply_central_config(Bench(config, self.bench_root), on_credentials=self.seed_jwks_cache)
         except Exception:
             logging.exception("Central bootstrap attempt failed")
             return False
+
+    def seed_jwks_cache(self, credentials: dict) -> None:
+        """Store the issuer's keys delivered with the credential, so the first token needs no fetch."""
+        from admin.backend.internal.jwks_cache import JwksCache
+
+        initial_jwks_cache = credentials.get("initial_jwks_cache")
+        if initial_jwks_cache is not None:
+            JwksCache(self.bench_root.parent, credentials["jwks_url"]).seed(initial_jwks_cache)
 
     def run_until_applied(self) -> None:
         """Retry until the Central credential is applied."""

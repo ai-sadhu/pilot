@@ -18,7 +18,10 @@ from pilot.managers.processes.systemd_render import SystemdRenderer
 from pilot.managers.systemd_user import SystemdUserMixin
 from pilot.utils import cli_root, run_command
 
-_ADMIN_IDLE_TIMEOUT = 60  # seconds of inactivity before socket-activated admin stops
+# Seconds of inactivity before the socket-activated admin stops. This outlives the
+# window a host image builder keeps a machine running before it captures a memory
+# snapshot, so the admin is still resident in the snapshot instead of cold on resume.
+_ADMIN_IDLE_TIMEOUT = 600
 _SYSTEMCTL_TIMEOUT = 90
 
 

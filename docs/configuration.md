@@ -100,7 +100,7 @@ allow_bench_management = true
 
 Nginx proxies admin traffic to `port + 1` on localhost. In production, `admin.domain` is required. `allow_bench_management` permits this admin to manage sibling benches and defaults to enabled only for development installs.
 
-Set the admin password with `pilot set-admin-password` or the Settings page. Pilot stores a PBKDF2-HMAC-SHA256 verifier. `jwt_secret` is local; `jwks_url` and `jwks_audience` are for a remote token issuer and are host-shared.
+Set the admin password with `pilot set-admin-password` or the Settings page. Pilot stores a PBKDF2-HMAC-SHA256 verifier. `jwt_secret` is local; `jwks_url` and `jwks_audience` are for a remote token issuer and are host-shared. Pilot keeps the issuer's public keys in `.jwks-cache.json` in the benches directory. A token whose key is in the cache is verified without a fetch, and a cache older than one minute is refreshed in the background. A key that is not in the cache causes a fetch, at most once every 30 seconds. A failed fetch keeps the cached keys.
 
 Site-specific settings, including developer mode, live in each site's `site_config.json`.
 
@@ -205,7 +205,7 @@ email_recipients = ["ops@example.com"]
 
 Shared tables are MariaDB, Postgres, Let's Encrypt, Central, the edge proxy, Datum, logs, resource limits, and the admin JWKS issuer. A bench exposes these values through its own `BenchConfig`; the model merges shared values on read and writes them back to the common file.
 
-Central endpoint and authentication data come from instance metadata. `central.hostname_aliases` maps a VM hostname pattern to its current local target. The VM ID is assigned at runtime, so use `*` for that part. Pilot creates redirect rules only for aliases whose targets exist on the bench. Renaming a site or moving the admin domain re-points the matching alias automatically; remove one when the rule is no longer needed. `pilot setup central` writes these settings - see [Setup Commands](commands.md#setup-commands).
+Central endpoint and authentication data come from instance metadata. The metadata can also include `initial_jwks_cache`, the issuer's JWK set. Pilot writes it to the JWKS cache before it marks the host bootstrapped, so the first remote token after boot is verified without a fetch. `central.hostname_aliases` maps a VM hostname pattern to its current local target. The VM ID is assigned at runtime, so use `*` for that part. Pilot creates redirect rules only for aliases whose targets exist on the bench. Renaming a site or moving the admin domain re-points the matching alias automatically; remove one when the rule is no longer needed. `pilot setup central` writes these settings - see [Setup Commands](commands.md#setup-commands).
 
 `[proxy]` describes the edge in front of the host. With `protocol_v2 = true` the HTTPS listener expects PROXY protocol v2 ahead of the TLS handshake, because the edge streams custom domains to port 443 by SNI without unwrapping them; the client address arrives in that header rather than in `X-Forwarded-For`. Leave it off when nothing fronts the host. See [Per-domain TLS](#per-domain-tls).
 

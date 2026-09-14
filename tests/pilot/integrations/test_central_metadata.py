@@ -17,6 +17,9 @@ _ATTRIBUTE = {
     "jwks_audience_id": "vm-boot-1",
 }
 
+# Pilot only checks the shape; the admin validates the keys.
+_KEY_SET = {"keys": [{"kid": "atlas-key"}]}
+
 
 class _FakeMetadata(InstanceMetadata):
     """The metadata service. A None value means the attribute is unset."""
@@ -117,6 +120,36 @@ def test_an_incomplete_attribute_raises(tmp_path: Path) -> None:
         apply_central_config(bench, _FakeMetadata(incomplete))
 
     assert bench.config.central.bootstrapped is False
+
+
+def test_the_initial_jwks_cache_comes_back_with_the_credentials() -> None:
+    attribute = {**_ATTRIBUTE, "initial_jwks_cache": _KEY_SET}
+
+    credentials = _FakeMetadata(json.dumps(attribute)).get_credentials()
+
+    assert credentials["initial_jwks_cache"] == _KEY_SET
+
+
+def test_an_initial_jwks_cache_that_is_not_an_object_raises() -> None:
+    malformed = json.dumps({**_ATTRIBUTE, "initial_jwks_cache": "keys"})
+
+    with pytest.raises(CentralClientError, match="initial_jwks_cache"):
+        _FakeMetadata(malformed).get_credentials()
+
+
+def test_apply_hands_over_the_credentials_before_the_host_reads_as_bootstrapped(tmp_path: Path) -> None:
+    from pilot.config.common import CommonConfig
+
+    bench = _awaiting_bench(tmp_path)
+    seen: list[tuple[dict, bool]] = []
+
+    def on_credentials(credentials) -> None:
+        seen.append((credentials["initial_jwks_cache"], CommonConfig.read(bench.path.parent).central.bootstrapped))
+
+    attribute = {**_ATTRIBUTE, "initial_jwks_cache": _KEY_SET}
+    assert apply_central_config(bench, _FakeMetadata(json.dumps(attribute)), on_credentials) is True
+
+    assert seen == [(_KEY_SET, False)]
 
 
 def test_a_metadata_flavoured_endpoint_is_rejected() -> None:

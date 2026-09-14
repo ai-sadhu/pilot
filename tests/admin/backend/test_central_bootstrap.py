@@ -12,10 +12,12 @@ from admin.backend.central_bootstrap import (
     install_central_bootstrap_watcher,
     main,
 )
+from admin.backend.internal.jwks_cache import JwksCache
 from pilot.config import BenchConfig
 from pilot.config.common import CommonConfig
 from pilot.exceptions import ConfigError
 from pilot.integrations.central import CentralClientError
+from tests.admin.backend.test_jwks import _jwks_document
 from tests.pilot.integrations.test_central_client import _bench
 from tests.pilot.integrations.test_central_metadata import _ATTRIBUTE
 
@@ -52,6 +54,34 @@ def test_the_attribute_arriving_writes_the_config(tmp_path: Path) -> None:
     saved = BenchConfig.read(bench_root)
     assert saved.central.bootstrapped is True
     assert saved.admin.jwks_audience == "vm-boot-1"
+
+
+def test_bootstrap_seeds_the_jwks_cache_so_the_first_token_needs_no_fetch(tmp_path: Path, monkeypatch) -> None:
+    from jwt import PyJWKClient
+    from jwt.exceptions import PyJWKClientError
+
+    bench_root = _awaiting_host(tmp_path)
+    attribute = {**_ATTRIBUTE, "initial_jwks_cache": _jwks_document()}
+
+    with _staged(json.dumps(attribute)):
+        assert CentralBootstrapWatcher(bench_root).check_once() is True
+
+    def refuse(client):
+        raise PyJWKClientError("issuer unreachable")
+
+    monkeypatch.setattr(PyJWKClient, "fetch_data", refuse)
+    assert JwksCache(bench_root.parent, _ATTRIBUTE["jwks_url"]).signing_key("rsa-key") is not None
+
+
+def test_an_unusable_initial_jwks_cache_does_not_stop_bootstrap(tmp_path: Path) -> None:
+    bench_root = _awaiting_host(tmp_path)
+    attribute = {**_ATTRIBUTE, "initial_jwks_cache": {"keys": []}}
+
+    with _staged(json.dumps(attribute)):
+        assert CentralBootstrapWatcher(bench_root).check_once() is True
+
+    assert CommonConfig.read(bench_root.parent).central.bootstrapped is True
+    assert not (bench_root.parent / JwksCache.FILENAME).exists()
 
 
 def test_a_malformed_attribute_is_logged_and_retried(tmp_path: Path) -> None:
