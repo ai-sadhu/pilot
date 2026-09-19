@@ -46,6 +46,15 @@ def test_explicit_weak_password_raises_before_saving(tmp_path: Path) -> None:
     assert not BenchConfig.read(bench.path).admin.verify_password("weak")
 
 
+def test_explicit_password_bypasses_tty_check(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+
+    bench = _make_bench(tmp_path)
+    _run_cmd(bench, password="Str0ng!pass")
+
+    assert BenchConfig.read(bench.path).admin.verify_password("Str0ng!pass")
+
+
 def test_blank_prompt_generates_a_password(tmp_path: Path, monkeypatch, capsys) -> None:
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)

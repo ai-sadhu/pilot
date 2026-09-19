@@ -12,28 +12,28 @@ from pilot.exceptions import BenchError
 class SetAdminPasswordCommand(Command):
     """Update the admin panel password.
 
-    Accepts an explicit ``--password`` flag or prompts on a TTY.  Refuses to
-    auto-generate when stdout is not a TTY to avoid credential exposure in logs.
+    Requires ``--password`` when stdout is not a TTY.
     """
 
     name: ClassVar[str] = "set-admin-password"
-    help: ClassVar[str] = "Set the admin panel password (prompts if --password is omitted)."
+    help: ClassVar[str] = "Set the admin panel password (requires --password in non-interactive/non-TTY environments)."
 
-    password: Annotated[str | None, Arg(help="New password; omit to be prompted securely.")] = None
+    password: Annotated[str | None, Arg(help="New password; omit to be prompted or auto-generated on a TTY.")] = None
 
     def run(self) -> None:
         import secrets
 
         from pilot.config import BenchConfig
 
+        if not self.password and not sys.stdout.isatty():
+            raise BenchError(
+                "Cannot safely generate a password in a non-interactive environment. "
+                "Use --password to supply one explicitly."
+            )
+
         password = self.resolve_password(self.password)
 
         if not password:
-            if not sys.stdout.isatty():
-                raise BenchError(
-                    "Cannot safely generate a password in a non-interactive environment. "
-                    "Use --password to supply one explicitly."
-                )
             password = secrets.token_urlsafe(12)
             self.report(f"Generated admin password: {password}")
 
