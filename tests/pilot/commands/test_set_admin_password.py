@@ -59,13 +59,14 @@ def test_explicit_weak_password_raises_before_saving(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Blank input → auto-generate
+# Blank input + TTY stdout → auto-generate safely
 # ---------------------------------------------------------------------------
 
 
 def test_blank_prompt_generates_a_password(tmp_path: Path, monkeypatch, capsys) -> None:
-    """Pressing Enter at the prompt must generate and save a valid password."""
+    """Pressing Enter at the prompt on a real TTY must generate and save a valid password."""
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
     monkeypatch.setattr("getpass.getpass", lambda prompt: "")
 
     bench = _make_bench(tmp_path)
@@ -81,28 +82,70 @@ def test_blank_prompt_generates_a_password(tmp_path: Path, monkeypatch, capsys) 
     assert config.admin.verify_password(generated)
 
 
-def test_blank_prompt_generated_password_meets_policy(tmp_path: Path, monkeypatch) -> None:
-    """The auto-generated password must satisfy the admin password policy."""
-    from pilot.internal.validators import validate_admin_password
-
+def test_blank_prompt_generated_password_is_stored(tmp_path: Path, monkeypatch) -> None:
+    """The auto-generated password must be hashed and stored in bench.toml."""
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
     monkeypatch.setattr("getpass.getpass", lambda prompt: "")
 
     bench = _make_bench(tmp_path)
-
-    # Capture the generated password via the config on disk
     _run_cmd(bench, password=None)
 
-    # token_urlsafe(12) is always ≥ 16 chars; policy only needs 8 chars + complexity.
+    # token_urlsafe(12) is always ≥ 16 chars.
     # Verify by checking it was stored (non-empty hash) rather than policy-validating
-    # the hash, since the hash itself won't pass validate_admin_password.
+    # the hash directly, since the hash itself won't pass validate_admin_password.
     config = BenchConfig.read(bench.path)
     assert config.admin.password  # non-empty hash was written
 
 
-def test_no_tty_generates_a_password(tmp_path: Path, monkeypatch, capsys) -> None:
-    """Without a TTY (CI / unattended) the command should still generate a password."""
+# ---------------------------------------------------------------------------
+# Blank input + non-TTY stdout → refuse with a clear BenchError
+# ---------------------------------------------------------------------------
+
+
+def test_non_tty_stdout_raises_bench_error(tmp_path: Path, monkeypatch) -> None:
+    """Without a TTY on stdout the command must refuse to auto-generate a password.
+
+    CI pipelines and wrapper processes capture stdout as logs, so emitting a
+    credential there would be a silent exposure. The error message must clearly
+    tell the user to supply --password explicitly.
+    """
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+
+    bench = _make_bench(tmp_path)
+    with pytest.raises(BenchError, match="--password"):
+        _run_cmd(bench, password=None)
+
+
+def test_non_tty_stdout_error_mentions_non_interactive(tmp_path: Path, monkeypatch) -> None:
+    """The error message must name 'non-interactive' so users understand the context."""
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+
+    bench = _make_bench(tmp_path)
+    with pytest.raises(BenchError, match="non-interactive"):
+        _run_cmd(bench, password=None)
+
+
+def test_non_tty_stdout_leaves_password_unchanged(tmp_path: Path, monkeypatch) -> None:
+    """A failed non-TTY run must not write anything to bench.toml."""
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+
+    bench = _make_bench(tmp_path)
+    with pytest.raises(BenchError):
+        _run_cmd(bench, password=None)
+
+    config = BenchConfig.read(bench.path)
+    assert not config.admin.password  # unchanged — still the empty string from _BENCH_DATA
+
+
+def test_tty_stdout_with_blank_input_generates_password(tmp_path: Path, monkeypatch, capsys) -> None:
+    """When stdout IS a TTY, blank input must generate and print the password."""
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("getpass.getpass", lambda prompt: "")
 
     bench = _make_bench(tmp_path)
     _run_cmd(bench, password=None)
