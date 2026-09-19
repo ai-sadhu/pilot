@@ -10,6 +10,12 @@ from pilot.exceptions import BenchError
 
 @dataclass(kw_only=True)
 class SetAdminPasswordCommand(Command):
+    """Update the admin panel password.
+
+    Accepts an explicit ``--password`` flag or prompts on a TTY.  Refuses to
+    auto-generate when stdout is not a TTY to avoid credential exposure in logs.
+    """
+
     name: ClassVar[str] = "set-admin-password"
     help: ClassVar[str] = "Set the admin panel password (prompts if --password is omitted)."
 
@@ -23,16 +29,11 @@ class SetAdminPasswordCommand(Command):
         password = self.resolve_password(self.password)
 
         if not password:
-            # Refuse to auto-generate when stdout is not a TTY: CI pipelines and
-            # wrapper processes capture stdout as logs, so printing a credential
-            # there would be a silent exposure. Callers must use --password instead.
             if not sys.stdout.isatty():
                 raise BenchError(
                     "Cannot safely generate a password in a non-interactive environment. "
                     "Use --password to supply one explicitly."
                 )
-
-            # stdout is a real terminal — generate, display, and save.
             password = secrets.token_urlsafe(12)
             self.report(f"Generated admin password: {password}")
 
