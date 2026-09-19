@@ -46,7 +46,7 @@ Disabling needs a Frappe that supports it and is exposed through the Admin UI on
 - `pilot new-site SITE`: create a site and add it to bench config.
 - `pilot rename-site OLD NEW [--release-old-hostname]`: rename a site, without dropping a request.
 - `pilot list-site-apps SITE`: list the apps in use on a site, disabled ones excluded.
-- `pilot set-admin-password`: Set the admin panel password in `bench.toml`. Leaving `--password` blank prompts you securely on your terminal. In automated scripts or pipelines (non-TTY stdout), you must provide the `--password` flag explicitly, as auto-generating passwords into log files is blocked for security. The password must meet dashboard complexity rules.
+- `pilot set-admin-password`: set the Admin panel password in `bench.toml`; prompts when `--password` is omitted and stdin is a TTY. Auto-generation after a blank prompt requires stdout to also be a TTY; if stdout is redirected, enter a password at the prompt or supply `--password`. The password must meet dashboard complexity rules.
 - `pilot set-admin-domain DOMAIN [--tls]`: move the Admin panel to another hostname, reissuing its certificate and republishing nginx. The old hostname is released once the switch has committed.
 
 ### Renaming Without Downtime
