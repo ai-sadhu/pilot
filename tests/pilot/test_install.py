@@ -242,14 +242,17 @@ echo reached_the_end
 
 def test_install_for_user_does_not_install_system_packages(tmp_path: Path) -> None:
     result = run_installer_functions(
-        """
-require_linger() { return 0; }
-fetch_pilot() { return 0; }
-ensure_uv() { return 0; }
-add_pilot_to_path() { return 0; }
-ensure_admin_venv() { return 0; }
-pkg_install() { echo "FAIL: pkg_install called"; exit 1; }
-ensure_tzdata() { echo "FAIL: ensure_tzdata called"; exit 1; }
+        f"""
+PILOT_DIR="{tmp_path}/pilot"
+mkdir -p "$PILOT_DIR/bin"
+touch "$PILOT_DIR/bin/pilot"
+require_linger() {{ return 0; }}
+fetch_pilot() {{ return 0; }}
+ensure_uv() {{ return 0; }}
+add_pilot_to_path() {{ return 0; }}
+ensure_admin_venv() {{ return 0; }}
+pkg_install() {{ echo "FAIL: pkg_install called"; exit 1; }}
+ensure_tzdata() {{ echo "FAIL: ensure_tzdata called"; exit 1; }}
 install_for_user
 """,
         tmp_path,
