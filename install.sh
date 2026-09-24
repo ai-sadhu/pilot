@@ -338,6 +338,23 @@ base_tools_present() {
     return 0
 }
 
+# Returns 0 when tzdata is installed and (on Debian/Ubuntu) deprecated aliases
+# such as Asia/Calcutta are present. Used by system_packages_present so that a
+# bench-user rerun on a host provisioned before tzdata-legacy was added is not
+# silently skipped — the readiness check fails, install_system_packages runs,
+# and root installs the missing package.
+timezone_data_present() {
+    case "$DISTRO" in
+        macos|unknown) return 0 ;;
+    esac
+    pkg_installed tzdata || return 1
+    case "$DISTRO" in
+        fedora|arch) return 0 ;;
+    esac
+    [ -e "${ZONEINFO_DIR:-/usr/share/zoneinfo}/Asia/Calcutta" ] || return 1
+    return 0
+}
+
 system_packages_present() {
     base_tools_present || return 1
 
@@ -358,6 +375,7 @@ system_packages_present() {
         pkg_installed "$package" || return 1
     done
     command -v node >/dev/null 2>&1 || return 1
+    timezone_data_present || return 1
     return 0
 }
 
