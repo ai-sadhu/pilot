@@ -274,6 +274,31 @@ disable_system_services() {
     done
 }
 
+# Python's zoneinfo needs this on systems without system tzdata.
+ensure_tzdata() {
+    case "$DISTRO" in
+        macos) return 0 ;;
+        unknown) command -v apt-get >/dev/null 2>&1 || return 0 ;;
+    esac
+    if ! pkg_installed tzdata; then
+        echo "Installing timezone data..."
+        pkg_install tzdata
+    fi
+    ensure_tzdata_legacy
+}
+
+# Ubuntu 24.04 moved the deprecated zone aliases (Asia/Calcutta, US/Eastern) out
+# of tzdata, and zoneinfo cannot load a name the distro does not ship. Fedora and
+# Arch keep them in tzdata, so test for a missing alias instead of a version.
+ensure_tzdata_legacy() {
+    [ -e "${ZONEINFO_DIR:-/usr/share/zoneinfo}/Asia/Calcutta" ] && return 0
+    case "$DISTRO" in
+        fedora|arch) return 0 ;;
+    esac
+    echo "Installing deprecated timezone names..."
+    pkg_install tzdata-legacy || echo "Warning: tzdata-legacy is unavailable; deprecated timezone names such as Asia/Calcutta will not resolve."
+}
+
 install_system_packages() {
     [ "$DISTRO" = "unknown" ] && return 0
     # Root always runs this (idempotent, and bare containers need it before
@@ -294,6 +319,7 @@ install_system_packages() {
     add_distro_repos
     pkg_update
     bootstrap_packages
+    ensure_tzdata
     install_database_engines
     install_production_packages
     disable_system_services
@@ -568,31 +594,6 @@ ensure_uv() {
     export PATH="$HOME/.local/bin:$PATH"
 }
 
-# Python's zoneinfo needs this on systems without system tzdata.
-ensure_tzdata() {
-    case "$DISTRO" in
-        macos) return 0 ;;
-        unknown) command -v apt-get >/dev/null 2>&1 || return 0 ;;
-    esac
-    if ! pkg_installed tzdata; then
-        echo "Installing timezone data..."
-        pkg_install tzdata
-    fi
-    ensure_tzdata_legacy
-}
-
-# Ubuntu 24.04 moved the deprecated zone aliases (Asia/Calcutta, US/Eastern) out
-# of tzdata, and zoneinfo cannot load a name the distro does not ship. Fedora and
-# Arch keep them in tzdata, so test for a missing alias instead of a version.
-ensure_tzdata_legacy() {
-    [ -e "${ZONEINFO_DIR:-/usr/share/zoneinfo}/Asia/Calcutta" ] && return 0
-    case "$DISTRO" in
-        fedora|arch) return 0 ;;
-    esac
-    echo "Installing deprecated timezone names..."
-    pkg_install tzdata-legacy || echo "Warning: tzdata-legacy is unavailable; deprecated timezone names such as Asia/Calcutta will not resolve."
-}
-
 # Appends the given PATH line to a file once, if not already there.
 add_path_line() {
     file="$1"; line="$2"
@@ -676,7 +677,6 @@ install_for_user() {
     rm -f "$PILOT_DIR/bench"
     chmod +x "$PILOT_DIR/bin/pilot"
     ensure_uv
-    ensure_tzdata
     add_pilot_to_path
     ensure_admin_venv
 

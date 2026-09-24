@@ -157,6 +157,7 @@ ensure_curl() { echo ensure_curl; }
 add_distro_repos() { echo add_distro_repos; }
 pkg_update() { echo pkg_update; }
 bootstrap_packages() { echo bootstrap_packages; }
+ensure_tzdata() { echo ensure_tzdata; }
 install_database_engines() { echo install_database_engines; }
 install_production_packages() { echo install_production_packages; }
 disable_system_services() { echo disable_system_services; }
@@ -167,6 +168,7 @@ install_system_packages
     )
     assert provisioned.returncode == 0, provisioned.stderr
     assert "install_database_engines" in provisioned.stdout.splitlines()
+    assert "ensure_tzdata" in provisioned.stdout.splitlines()
 
 
 def zoneinfo_dir(tmp_path: Path, *, with_alias: bool) -> Path:
@@ -236,3 +238,21 @@ echo reached_the_end
     assert result.returncode == 0, result.stderr
     assert "Warning: tzdata-legacy is unavailable" in result.stdout
     assert "reached_the_end" in result.stdout
+
+
+def test_install_for_user_does_not_install_system_packages(tmp_path: Path) -> None:
+    result = run_installer_functions(
+        """
+require_linger() { return 0; }
+fetch_pilot() { return 0; }
+ensure_uv() { return 0; }
+add_pilot_to_path() { return 0; }
+ensure_admin_venv() { return 0; }
+pkg_install() { echo "FAIL: pkg_install called"; exit 1; }
+ensure_tzdata() { echo "FAIL: ensure_tzdata called"; exit 1; }
+install_for_user
+""",
+        tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "FAIL" not in result.stdout
