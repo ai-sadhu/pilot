@@ -338,10 +338,7 @@ base_tools_present() {
     return 0
 }
 
-# Returns 0 when tzdata is installed and (on Debian/Ubuntu) deprecated aliases
-# such as Asia/Calcutta are present. Called from install_for_user as a read-only
-# advisory — never used to gate install_system_packages, so the bench user is
-# never pushed into privileged provisioning on a rerun.
+# Returns 0 when tzdata and (on Debian/Ubuntu) deprecated aliases are present.
 timezone_data_present() {
     case "$DISTRO" in
         macos|unknown) return 0 ;;
@@ -705,9 +702,7 @@ install_for_user() {
     echo ""
     echo "If 'pilot' is not found, open a new terminal or run: . ${RC_FILE:-$HOME/.bashrc}"
 
-    # Read-only check — never calls pkg_install or sudo. If the root pass was run
-    # before tzdata-legacy was added to the provisioning list, the alias may still
-    # be missing. Inform the operator; only root can fix it.
+    # Advisory only: missing timezone aliases can only be installed by root.
     if ! timezone_data_present; then
         echo "" >&2
         echo "⚠ Warning: deprecated timezone aliases (e.g. Asia/Calcutta) are missing." >&2

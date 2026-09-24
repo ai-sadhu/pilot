@@ -104,7 +104,6 @@ def test_system_packages_present_checks_distro_packages(
         f"""
 DISTRO={distro}
 base_tools_present() {{ return 0; }}
-timezone_data_present() {{ return 0; }}
 pkg_installed() {{ printf '%s\\n' "$1"; return 0; }}
 system_packages_present
 """,
@@ -124,7 +123,6 @@ def test_system_packages_present_fails_when_required_package_is_missing(
         f"""
 DISTRO={distro}
 base_tools_present() {{ return 0; }}
-timezone_data_present() {{ return 0; }}
 pkg_installed() {{ [ "$1" != "{missing}" ]; }}
 system_packages_present
 """,
@@ -189,6 +187,30 @@ DISTRO={distro}
 ZONEINFO_DIR={zoneinfo_dir(tmp_path, with_alias=False)}
 pkg_install() {{ echo "pkg_install $*"; }}
 ensure_tzdata_legacy
+""",
+        tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "pkg_install tzdata-legacy" in result.stdout
+
+
+def test_root_provisioning_installs_missing_timezone_aliases(tmp_path: Path) -> None:
+    result = run_installer_functions(
+        f"""
+DISTRO=ubuntu
+ZONEINFO_DIR={zoneinfo_dir(tmp_path, with_alias=False)}
+is_root() {{ return 0; }}
+ensure_curl() {{ return 0; }}
+add_distro_repos() {{ return 0; }}
+pkg_update() {{ return 0; }}
+bootstrap_packages() {{ return 0; }}
+install_database_engines() {{ return 0; }}
+install_production_packages() {{ return 0; }}
+disable_system_services() {{ return 0; }}
+install_node() {{ return 0; }}
+pkg_installed() {{ return 0; }}
+pkg_install() {{ echo "pkg_install $*"; }}
+install_system_packages
 """,
         tmp_path,
     )
@@ -264,11 +286,9 @@ install_for_user
 
 
 # ── timezone_data_present ─────────────────────────────────────────────────────
-# timezone_data_present is advisory only — it must NEVER be wired into
-# system_packages_present, because that would push the bench user into
-# privileged provisioning on a rerun (the exact bug we are fixing).
 
-def test_system_packages_present_passes_even_when_timezone_alias_missing(
+
+def test_system_packages_present_passes_when_timezone_alias_missing(
     tmp_path: Path,
 ) -> None:
     """system_packages_present must not gate on timezone data.
@@ -282,7 +302,6 @@ def test_system_packages_present_passes_even_when_timezone_alias_missing(
 DISTRO=ubuntu
 ZONEINFO_DIR={zoneinfo_dir(tmp_path, with_alias=False)}
 base_tools_present() {{ return 0; }}
-timezone_data_present() {{ return 0; }}
 pkg_installed() {{ return 0; }}
 system_packages_present
 """,
@@ -292,7 +311,7 @@ system_packages_present
 
 
 def test_install_for_user_warns_when_timezone_alias_missing(tmp_path: Path) -> None:
-    """install_for_user prints an advisory to stderr and exits 0 — no sudo."""
+    """install_for_user prints an advisory to stderr when deprecated aliases are missing."""
     result = run_installer_functions(
         f"""
 DISTRO=ubuntu
