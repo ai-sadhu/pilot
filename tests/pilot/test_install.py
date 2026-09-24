@@ -264,22 +264,78 @@ install_for_user
 
 
 # ── timezone_data_present ─────────────────────────────────────────────────────
-# These guard the P1 rerun scenario: a host that has all packages but was
-# provisioned before tzdata-legacy was added must not pass the readiness check.
+# timezone_data_present is advisory only — it must NEVER be wired into
+# system_packages_present, because that would push the bench user into
+# privileged provisioning on a rerun (the exact bug we are fixing).
 
-def test_system_packages_present_fails_when_timezone_data_missing(tmp_path: Path) -> None:
-    """system_packages_present must return non-zero when timezone_data_present fails."""
+def test_system_packages_present_passes_even_when_timezone_alias_missing(
+    tmp_path: Path,
+) -> None:
+    """system_packages_present must not gate on timezone data.
+
+    If it did, a bench-user rerun on a host provisioned before tzdata-legacy
+    was added would fail the check, triggering install_system_packages with
+    sudo — reintroducing the privilege-escalation bug.
+    """
     result = run_installer_functions(
         f"""
 DISTRO=ubuntu
 ZONEINFO_DIR={zoneinfo_dir(tmp_path, with_alias=False)}
 base_tools_present() {{ return 0; }}
+timezone_data_present() {{ return 0; }}
 pkg_installed() {{ return 0; }}
 system_packages_present
 """,
         tmp_path,
     )
-    assert result.returncode != 0
+    assert result.returncode == 0, result.stderr
+
+
+def test_install_for_user_warns_when_timezone_alias_missing(tmp_path: Path) -> None:
+    """install_for_user prints an advisory to stderr and exits 0 — no sudo."""
+    result = run_installer_functions(
+        f"""
+DISTRO=ubuntu
+PILOT_DIR="{tmp_path}/pilot"
+INSTALL_URL="https://example.com/install.sh"
+ZONEINFO_DIR={zoneinfo_dir(tmp_path, with_alias=False)}
+mkdir -p "$PILOT_DIR/bin"
+touch "$PILOT_DIR/bin/pilot"
+require_linger() {{ return 0; }}
+fetch_pilot() {{ return 0; }}
+ensure_uv() {{ return 0; }}
+add_pilot_to_path() {{ return 0; }}
+ensure_admin_venv() {{ return 0; }}
+pkg_installed() {{ return 0; }}
+install_for_user
+""",
+        tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Warning" in result.stderr
+    assert "Asia/Calcutta" in result.stderr
+
+
+def test_install_for_user_no_warning_when_timezone_alias_present(tmp_path: Path) -> None:
+    result = run_installer_functions(
+        f"""
+DISTRO=ubuntu
+PILOT_DIR="{tmp_path}/pilot"
+ZONEINFO_DIR={zoneinfo_dir(tmp_path, with_alias=True)}
+mkdir -p "$PILOT_DIR/bin"
+touch "$PILOT_DIR/bin/pilot"
+require_linger() {{ return 0; }}
+fetch_pilot() {{ return 0; }}
+ensure_uv() {{ return 0; }}
+add_pilot_to_path() {{ return 0; }}
+ensure_admin_venv() {{ return 0; }}
+pkg_installed() {{ return 0; }}
+install_for_user
+""",
+        tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Warning" not in result.stderr
 
 
 @pytest.mark.parametrize("distro", ["ubuntu", "debian"])

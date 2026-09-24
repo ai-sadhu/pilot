@@ -339,10 +339,9 @@ base_tools_present() {
 }
 
 # Returns 0 when tzdata is installed and (on Debian/Ubuntu) deprecated aliases
-# such as Asia/Calcutta are present. Used by system_packages_present so that a
-# bench-user rerun on a host provisioned before tzdata-legacy was added is not
-# silently skipped — the readiness check fails, install_system_packages runs,
-# and root installs the missing package.
+# such as Asia/Calcutta are present. Called from install_for_user as a read-only
+# advisory — never used to gate install_system_packages, so the bench user is
+# never pushed into privileged provisioning on a rerun.
 timezone_data_present() {
     case "$DISTRO" in
         macos|unknown) return 0 ;;
@@ -375,7 +374,6 @@ system_packages_present() {
         pkg_installed "$package" || return 1
     done
     command -v node >/dev/null 2>&1 || return 1
-    timezone_data_present || return 1
     return 0
 }
 
@@ -706,6 +704,18 @@ install_for_user() {
     echo "  pilot start"
     echo ""
     echo "If 'pilot' is not found, open a new terminal or run: . ${RC_FILE:-$HOME/.bashrc}"
+
+    # Read-only check — never calls pkg_install or sudo. If the root pass was run
+    # before tzdata-legacy was added to the provisioning list, the alias may still
+    # be missing. Inform the operator; only root can fix it.
+    if ! timezone_data_present; then
+        echo "" >&2
+        echo "⚠ Warning: deprecated timezone aliases (e.g. Asia/Calcutta) are missing." >&2
+        echo "  Some apps may fail to start if they reference a legacy timezone name." >&2
+        echo "  Fix it by re-running the installer as root:" >&2
+        echo "" >&2
+        echo "    curl -fsSL $INSTALL_URL | sudo bash" >&2
+    fi
 }
 
 # ── run ───────────────────────────────────────────────────────────────────────
