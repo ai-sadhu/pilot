@@ -27,6 +27,7 @@ _S3 = {
     "region": "in-mumbai",
     "endpoint_url": "https://s3.in-mumbai.example.test",
 }
+_TELEMETRY = {"endpoint": "https://datum.in-mumbai.example.test", "token": "datum-token"}
 
 
 class _FakeMetadata(InstanceMetadata):
@@ -158,7 +159,9 @@ def test_apply_hands_over_the_credentials_before_the_host_reads_as_bootstrapped(
     seen: list[tuple[dict, bool]] = []
 
     def on_credentials(credentials) -> None:
-        seen.append((credentials["initial_jwks_cache"], CommonConfig.read(bench.path.parent).central.bootstrapped))
+        seen.append(
+            (credentials["initial_jwks_cache"], CommonConfig.read(bench.path.parent).central.bootstrapped)
+        )
 
     attribute = {**_ATTRIBUTE, "initial_jwks_cache": _KEY_SET}
     assert apply_central_config(bench, _FakeMetadata(json.dumps(attribute)), on_credentials) is True
@@ -192,6 +195,36 @@ def test_apply_preserves_an_existing_provider_config(tmp_path: Path) -> None:
     apply_central_config(bench, _FakeMetadata(json.dumps({**_ATTRIBUTE, "s3": _S3})))
 
     assert BenchConfig.read(bench.path).s3.provider == "aws"
+
+
+def test_telemetry_comes_back_with_the_credentials() -> None:
+    credentials = _FakeMetadata(json.dumps({**_ATTRIBUTE, "telemetry": _TELEMETRY})).get_credentials()
+
+    assert credentials["telemetry"] == _TELEMETRY
+
+
+def test_apply_saves_the_datum_credential(tmp_path: Path) -> None:
+    bench = _awaiting_bench(tmp_path)
+
+    apply_central_config(bench, _FakeMetadata(json.dumps({**_ATTRIBUTE, "telemetry": _TELEMETRY})))
+
+    saved = BenchConfig.read(bench.path).telemetry
+    assert saved.endpoint == "https://datum.in-mumbai.example.test"
+    assert saved.token == "datum-token"
+
+
+def test_an_incomplete_telemetry_block_raises() -> None:
+    incomplete = json.dumps({**_ATTRIBUTE, "telemetry": {"endpoint": _TELEMETRY["endpoint"]}})
+
+    with pytest.raises(CentralClientError, match="telemetry is missing: token"):
+        _FakeMetadata(incomplete).get_credentials()
+
+
+def test_a_metadata_flavoured_telemetry_endpoint_is_rejected() -> None:
+    hostile = json.dumps({**_ATTRIBUTE, "telemetry": {**_TELEMETRY, "endpoint": "http://169.254.169.254/"}})
+
+    with pytest.raises(CentralClientError):
+        _FakeMetadata(hostile).get_credentials()
 
 
 def test_a_metadata_flavoured_endpoint_is_rejected() -> None:
