@@ -139,6 +139,8 @@ system_packages_present
 def test_non_root_install_skips_provisioning_only_when_stack_is_present(
     tmp_path: Path,
 ) -> None:
+    # Bench-user second pass: all packages present → return immediately without
+    # touching system services (enable_cron_service requires root).
     skipped = run_installer_functions(
         """
 DISTRO=ubuntu
@@ -151,7 +153,7 @@ install_system_packages
         tmp_path,
     )
     assert skipped.returncode == 0, skipped.stderr
-    assert skipped.stdout.splitlines() == ["enable_cron_service"]
+    assert skipped.stdout == ""
 
     provisioned = run_installer_functions(
         """
@@ -257,11 +259,12 @@ echo reached_the_end
 def test_enable_cron_service_starts_distro_daemon(
     distro: str, expected_service: str, tmp_path: Path
 ) -> None:
+    # Cron not running at all → must enable it.
     result = run_installer_functions(
         f"""
 DISTRO={distro}
 systemd_booted() {{ return 0; }}
-systemctl() {{ [ "$1" = "is-active" ] && return 1; }}
+systemctl() {{ return 1; }}
 run_sudo() {{ echo "run_sudo $*"; }}
 enable_cron_service
 """,
@@ -271,11 +274,30 @@ enable_cron_service
     assert result.stdout.strip() == f"run_sudo systemctl enable --now {expected_service}"
 
 
-def test_enable_cron_service_skips_when_systemd_not_booted(tmp_path: Path) -> None:
+def test_enable_cron_service_starts_when_active_but_disabled(tmp_path: Path) -> None:
+    # Running now but not enabled at boot → must still call enable --now so it
+    # survives a reboot.
     result = run_installer_functions(
         """
 DISTRO=ubuntu
-systemd_booted() { return 1; }
+systemd_booted() { return 0; }
+systemctl() { [ "$1" = "is-active" ] && return 0; return 1; }
+run_sudo() { echo "run_sudo $*"; }
+enable_cron_service
+""",
+        tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "run_sudo systemctl enable --now cron"
+
+
+def test_enable_cron_service_skips_when_active_and_enabled(tmp_path: Path) -> None:
+    # Both active and enabled → nothing to do.
+    result = run_installer_functions(
+        """
+DISTRO=ubuntu
+systemd_booted() { return 0; }
+systemctl() { return 0; }
 run_sudo() { echo "run_sudo $*"; }
 enable_cron_service
 """,
@@ -285,12 +307,11 @@ enable_cron_service
     assert result.stdout == ""
 
 
-def test_enable_cron_service_skips_when_already_active(tmp_path: Path) -> None:
+def test_enable_cron_service_skips_when_systemd_not_booted(tmp_path: Path) -> None:
     result = run_installer_functions(
         """
 DISTRO=ubuntu
-systemd_booted() { return 0; }
-systemctl() { [ "$1" = "is-active" ] && return 0; }
+systemd_booted() { return 1; }
 run_sudo() { echo "run_sudo $*"; }
 enable_cron_service
 """,
@@ -323,7 +344,7 @@ def test_enable_cron_service_surfaces_systemctl_failure(tmp_path: Path) -> None:
 set -e
 DISTRO=ubuntu
 systemd_booted() { return 0; }
-systemctl() { [ "$1" = "is-active" ] && return 1; }
+systemctl() { return 1; }
 run_sudo() { echo "systemctl: unit failed to start" >&2; return 1; }
 enable_cron_service
 """,
@@ -331,5 +352,3 @@ enable_cron_service
     )
     assert result.returncode != 0
     assert "systemctl: unit failed to start" in result.stderr
-
-
