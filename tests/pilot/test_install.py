@@ -292,7 +292,6 @@ enable_cron_service
 
 
 def test_enable_cron_service_skips_when_active_and_enabled(tmp_path: Path) -> None:
-    # Both active and enabled → nothing to do.
     result = run_installer_functions(
         """
 DISTRO=ubuntu
