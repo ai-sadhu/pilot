@@ -185,11 +185,11 @@ bootstrap_packages() {
         macos)
             pkg_install git python3 ;;
         debian|ubuntu)
-            pkg_install git curl bash sudo ca-certificates python3 python3-dev build-essential tzdata cron;;
+            pkg_install git curl bash sudo ca-certificates python3 python3-dev build-essential tzdata cron ;;
         fedora)
-            pkg_install git curl bash sudo shadow-utils python3 python3-devel gcc gcc-c++ make tzdata cronie;;
+            pkg_install git curl bash sudo shadow-utils python3 python3-devel gcc gcc-c++ make tzdata cronie ;;
         arch)
-            pkg_install git curl bash sudo python base-devel tzdata cronie;;
+            pkg_install git curl bash sudo python base-devel tzdata cronie ;;
     esac
 }
 
@@ -274,6 +274,17 @@ disable_system_services() {
     done
 }
 
+enable_cron_service() {
+    case "$DISTRO" in
+        macos|unknown) return 0 ;;
+        debian|ubuntu) service=cron ;;
+        fedora)        service=crond ;;
+        arch)          service=cronie ;;
+        *)             return 0 ;;
+    esac
+    run_sudo systemctl enable --now "$service" 2>/dev/null || true
+}
+
 install_system_packages() {
     [ "$DISTRO" = "unknown" ] && return 0
     # Root always runs this (idempotent, and bare containers need it before
@@ -297,6 +308,7 @@ install_system_packages() {
     install_database_engines
     install_production_packages
     disable_system_services
+    enable_cron_service
     install_node
 }
 

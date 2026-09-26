@@ -34,6 +34,7 @@ EXPECTED_PACKAGES = {
         "certbot",
         "supervisor",
         "libnginx-mod-http-modsecurity",
+        "cron",
     ],
     "ubuntu": [
         "mariadb-server",
@@ -48,6 +49,7 @@ EXPECTED_PACKAGES = {
         "certbot",
         "supervisor",
         "libnginx-mod-http-modsecurity",
+        "cron",
     ],
     "fedora": [
         "mariadb-server",
@@ -61,6 +63,7 @@ EXPECTED_PACKAGES = {
         "nginx",
         "certbot",
         "supervisor",
+        "cronie",
     ],
     "arch": [
         "mariadb",
@@ -73,6 +76,7 @@ EXPECTED_PACKAGES = {
         "nginx",
         "certbot",
         "supervisor",
+        "cronie",
     ],
 }
 
@@ -160,6 +164,7 @@ bootstrap_packages() { echo bootstrap_packages; }
 install_database_engines() { echo install_database_engines; }
 install_production_packages() { echo install_production_packages; }
 disable_system_services() { echo disable_system_services; }
+enable_cron_service() { echo enable_cron_service; }
 install_node() { echo install_node; }
 install_system_packages
 """,
@@ -167,6 +172,7 @@ install_system_packages
     )
     assert provisioned.returncode == 0, provisioned.stderr
     assert "install_database_engines" in provisioned.stdout.splitlines()
+    assert "enable_cron_service" in provisioned.stdout.splitlines()
 
 
 def zoneinfo_dir(tmp_path: Path, *, with_alias: bool) -> Path:
@@ -236,3 +242,44 @@ echo reached_the_end
     assert result.returncode == 0, result.stderr
     assert "Warning: tzdata-legacy is unavailable" in result.stdout
     assert "reached_the_end" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("distro", "expected_service"),
+    [
+        ("arch", "cronie"),
+        ("fedora", "crond"),
+        ("debian", "cron"),
+        ("ubuntu", "cron"),
+    ],
+)
+def test_enable_cron_service_starts_distro_daemon(
+    distro: str, expected_service: str, tmp_path: Path
+) -> None:
+    result = run_installer_functions(
+        f"""
+DISTRO={distro}
+run_sudo() {{ echo "run_sudo $*"; }}
+enable_cron_service
+""",
+        tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f"run_sudo systemctl enable --now {expected_service}"
+
+
+@pytest.mark.parametrize("distro", ["macos", "unknown"])
+def test_enable_cron_service_skips_unsupported_distros(
+    distro: str, tmp_path: Path
+) -> None:
+    result = run_installer_functions(
+        f"""
+DISTRO={distro}
+run_sudo() {{ echo "run_sudo $*"; }}
+enable_cron_service
+""",
+        tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+
