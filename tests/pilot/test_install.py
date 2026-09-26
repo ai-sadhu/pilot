@@ -144,13 +144,14 @@ def test_non_root_install_skips_provisioning_only_when_stack_is_present(
 DISTRO=ubuntu
 is_root() { return 1; }
 system_packages_present() { return 0; }
+enable_cron_service() { echo enable_cron_service; }
 ensure_curl() { echo ensure_curl; }
 install_system_packages
 """,
         tmp_path,
     )
     assert skipped.returncode == 0, skipped.stderr
-    assert skipped.stdout == ""
+    assert skipped.stdout.splitlines() == ["enable_cron_service"]
 
     provisioned = run_installer_functions(
         """
@@ -282,4 +283,19 @@ enable_cron_service
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
+
+
+def test_enable_cron_service_surfaces_systemctl_failure(tmp_path: Path) -> None:
+    result = run_installer_functions(
+        """
+set -e
+DISTRO=ubuntu
+run_sudo() { echo "systemctl: unit failed to start" >&2; return 1; }
+enable_cron_service
+""",
+        tmp_path,
+    )
+    assert result.returncode != 0
+    assert "systemctl: unit failed to start" in result.stderr
+
 

@@ -274,6 +274,7 @@ disable_system_services() {
     done
 }
 
+
 enable_cron_service() {
     case "$DISTRO" in
         macos|unknown) return 0 ;;
@@ -282,7 +283,7 @@ enable_cron_service() {
         arch)          service=cronie ;;
         *)             return 0 ;;
     esac
-    run_sudo systemctl enable --now "$service" 2>/dev/null || true
+    run_sudo systemctl enable --now "$service"
 }
 
 install_system_packages() {
@@ -291,7 +292,10 @@ install_system_packages() {
     # useradd). A non-root install may skip it only when the complete host stack
     # is already present, such as the second pass after root provisioning.
     if ! is_root; then
-        system_packages_present && return 0
+        if system_packages_present; then
+            enable_cron_service
+            return 0
+        fi
         if ! command -v sudo >/dev/null 2>&1; then
             echo "sudo is not installed and you are not root, so base packages cannot"
             echo "be installed. Re-run this installer as root first, then as the bench user:"
