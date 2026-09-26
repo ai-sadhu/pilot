@@ -260,6 +260,8 @@ def test_enable_cron_service_starts_distro_daemon(
     result = run_installer_functions(
         f"""
 DISTRO={distro}
+systemd_booted() {{ return 0; }}
+systemctl() {{ [ "$1" = "is-active" ] && return 1; }}
 run_sudo() {{ echo "run_sudo $*"; }}
 enable_cron_service
 """,
@@ -269,6 +271,35 @@ enable_cron_service
     assert result.stdout.strip() == f"run_sudo systemctl enable --now {expected_service}"
 
 
+def test_enable_cron_service_skips_when_systemd_not_booted(tmp_path: Path) -> None:
+    result = run_installer_functions(
+        """
+DISTRO=ubuntu
+systemd_booted() { return 1; }
+run_sudo() { echo "run_sudo $*"; }
+enable_cron_service
+""",
+        tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+
+
+def test_enable_cron_service_skips_when_already_active(tmp_path: Path) -> None:
+    result = run_installer_functions(
+        """
+DISTRO=ubuntu
+systemd_booted() { return 0; }
+systemctl() { [ "$1" = "is-active" ] && return 0; }
+run_sudo() { echo "run_sudo $*"; }
+enable_cron_service
+""",
+        tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+
+
 @pytest.mark.parametrize("distro", ["macos", "unknown"])
 def test_enable_cron_service_skips_unsupported_distros(
     distro: str, tmp_path: Path
@@ -276,6 +307,7 @@ def test_enable_cron_service_skips_unsupported_distros(
     result = run_installer_functions(
         f"""
 DISTRO={distro}
+systemd_booted() {{ return 0; }}
 run_sudo() {{ echo "run_sudo $*"; }}
 enable_cron_service
 """,
@@ -290,6 +322,8 @@ def test_enable_cron_service_surfaces_systemctl_failure(tmp_path: Path) -> None:
         """
 set -e
 DISTRO=ubuntu
+systemd_booted() { return 0; }
+systemctl() { [ "$1" = "is-active" ] && return 1; }
 run_sudo() { echo "systemctl: unit failed to start" >&2; return 1; }
 enable_cron_service
 """,

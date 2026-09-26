@@ -72,6 +72,10 @@ is_root() {
     [ "$(id -u)" -eq 0 ]
 }
 
+systemd_booted() {
+    [ -d /run/systemd/system ] && command -v loginctl >/dev/null 2>&1
+}
+
 # Piping this script through `curl | sh` leaves stdin occupied, so sudo's own
 # prompt cannot read an answer. Ask via /dev/tty and cache it instead.
 run_sudo() {
@@ -276,6 +280,7 @@ disable_system_services() {
 
 
 enable_cron_service() {
+    systemd_booted || return 0
     case "$DISTRO" in
         macos|unknown) return 0 ;;
         debian|ubuntu) service=cron ;;
@@ -283,6 +288,9 @@ enable_cron_service() {
         arch)          service=cronie ;;
         *)             return 0 ;;
     esac
+    if systemctl is-active --quiet "$service" 2>/dev/null; then
+        return 0
+    fi
     run_sudo systemctl enable --now "$service"
 }
 
@@ -357,10 +365,6 @@ system_packages_present() {
 
 bench_home() {
     getent passwd "$1" | cut -d: -f6
-}
-
-systemd_booted() {
-    [ -d /run/systemd/system ] && command -v loginctl >/dev/null 2>&1
 }
 
 linger_enabled() {
