@@ -1,98 +1,67 @@
-import argparse
-import json
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from pilot.config import BenchConfig, S3Config, SiteConfig
+from pilot.core.bench import Bench
 from pilot.core.site import Site
 from pilot.exceptions import BenchError
-from pilot.internal.cli.command import add_command_arguments, command_from_args
-from pilot.commands.runtime.recover import RecoverCommand
 
 
-def _parse_recover(argv: list[str], bench) -> RecoverCommand:
-    parser = argparse.ArgumentParser()
-    add_command_arguments(RecoverCommand, parser)
-    return command_from_args(RecoverCommand, parser.parse_args(argv), bench=bench)
-
-
-def test_recover_command_flags(tmp_path: Path) -> None:
-    bench = SimpleNamespace(path=tmp_path, sites_path=tmp_path / "sites", config=BenchConfig())
-    cmd = _parse_recover(["--site", "mysite.localhost", "-t", "20260927_140002", "--dry-run", "--leave-maintenance"], bench)
-    assert cmd.site_name == "mysite.localhost"
-    assert cmd.timestamp == "20260927_140002"
-    assert cmd.dry_run is True
-    assert cmd.leave_maintenance is True
-
-
-def test_recover_command_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
-    bench_dir = tmp_path / "test-bench"
+def _setup_bench(tmp_path: Path) -> Bench:
+    bench_dir = tmp_path / "bench"
+    bench_dir.mkdir()
     sites_dir = bench_dir / "sites"
-    site_dir = sites_dir / "site1.localhost"
-    site_dir.mkdir(parents=True)
-    (site_dir / "site_config.json").write_text(json.dumps({}))
+    sites_dir.mkdir()
 
-    bench = SimpleNamespace(
-        path=bench_dir,
-        sites_path=sites_dir,
-        config=BenchConfig(
-            name="test-bench",
-            s3=S3Config(bucket="my-bucket", endpoint_url="https://s3.example.com", access_key="k", secret_key="s"),
+    config = BenchConfig(
+        name="test-bench",
+        s3=S3Config(
+            bucket="my-bucket",
+            endpoint_url="https://s3.example.com",
+            access_key="key",
+            secret_key="secret",
+            region="us-east-1",
         ),
     )
-    site = Site(SiteConfig(name="site1.localhost", apps=[]), bench)
-    bench.sites = lambda: [site]
-    bench.site = lambda name: site
-
-    fake_offsite = MagicMock()
-    fake_offsite.list_backups.return_value = {
-        "20260927_140002": {
-            "database": "20260927_140002-site1.localhost-database.sql.gz",
-            "files": "20260927_140002-site1.localhost-files.tar",
-            "site_config": "20260927_140002-site1.localhost-site_config_backup.json",
-        }
-    }
-    monkeypatch.setattr("pilot.core.site.recovery.OffsiteBackup.from_config", lambda *args, **kwargs: fake_offsite)
-
-    cmd = _parse_recover(["--dry-run"], bench)
-    cmd.run()
-
-    out = capsys.readouterr().out
-    assert "Inspecting offsite S3 backups" in out
-    assert "20260927_140002" in out
-    assert "files" in out
-    assert "site_config" in out
+    bench = Bench(config, bench_dir)
+    return bench
 
 
-def test_recover_command_execution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
-    bench_dir = tmp_path / "test-bench"
-    sites_dir = bench_dir / "sites"
-    site_dir = sites_dir / "site1.localhost"
-    site_dir.mkdir(parents=True)
-    (site_dir / "site_config.json").write_text(json.dumps({}))
+def test_recover_command_unconfigured_s3_raises(tmp_path: Path) -> None:
+    from pilot.commands.runtime.recover import RecoverCommand
 
-    bench = SimpleNamespace(
-        path=bench_dir,
-        sites_path=sites_dir,
-        config=BenchConfig(
-            name="test-bench",
-            s3=S3Config(bucket="my-bucket", endpoint_url="https://s3.example.com", access_key="k", secret_key="s"),
-        ),
-    )
-    site = Site(SiteConfig(name="site1.localhost", apps=[]), bench)
-    bench.sites = lambda: [site]
-    bench.site = lambda name: site
+    bench = _setup_bench(tmp_path)
+    bench.config.s3 = S3Config(bucket="")
 
-    fake_recovery = MagicMock()
-    fake_recovery.recover.return_value = "20260927_140002"
-    monkeypatch.setattr("pilot.core.site.recovery.SiteRecovery.recover", fake_recovery.recover)
+    cmd = RecoverCommand(bench=bench)
+    with pytest.raises(BenchError, match="S3 offsite backups are not configured"):
+        cmd.run()
 
-    cmd = _parse_recover(["--site", "site1.localhost"], bench)
-    cmd.run()
 
-    out = capsys.readouterr().out
-    assert "Successfully recovered site 'site1.localhost'" in out
-    assert "Recovery completed successfully" in out
+def test_recover_command_no_sites_raises(tmp_path: Path) -> None:
+    from pilot.commands.runtime.recover import RecoverCommand
+
+    bench = _setup_bench(tmp_path)
+    cmd = RecoverCommand(bench=bench)
+    with pytest.raises(BenchError, match="No sites found"):
+        cmd.run()
+
+
+def test_recover_command_specific_site_runs_recovery(tmp_path: Path) -> None:
+    from pilot.commands.runtime.recover import RecoverCommand
+
+    bench = _setup_bench(tmp_path)
+    site_dir = bench.sites_path / "site1.localhost"
+    site_dir.mkdir()
+    (site_dir / "site_config.json").write_text('{"maintenance_mode": 0, "pause_scheduler": 0}')
+
+    cmd = RecoverCommand(bench=bench, site_name="site1.localhost")
+
+    with patch("pilot.core.site.recovery.SiteRecovery.recover", return_value="20260927_140002") as mock_recover:
+        cmd.run()
+        mock_recover.assert_called_once_with(
+            leave_maintenance=False,
+            on_progress=cmd.report,
+        )

@@ -104,6 +104,18 @@ class Site:
 
         SiteCommands(self).restore(db_file, public_files, private_files)
 
+    def recover(
+        self,
+        leave_maintenance: bool = False,
+        on_progress: Callable[[str], None] = lambda _: None,
+    ) -> str:
+        from pilot.core.site.recovery import SiteRecovery
+
+        return SiteRecovery(self).recover(
+            leave_maintenance=leave_maintenance,
+            on_progress=on_progress,
+        )
+
     def reinstall(self, admin_password: str) -> None:
         from pilot.core.site.commands import SiteCommands
 

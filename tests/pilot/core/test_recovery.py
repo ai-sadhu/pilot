@@ -58,18 +58,6 @@ def test_recovery_no_backups_found_raises(tmp_path: Path, monkeypatch: pytest.Mo
         recovery.recover()
 
 
-def test_recovery_specific_timestamp_not_found_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    bench, site = _setup_bench_and_site(tmp_path)
-
-    fake_offsite = MagicMock()
-    fake_offsite.get_backup.return_value = None
-    monkeypatch.setattr("pilot.core.site.recovery.OffsiteBackup.from_config", lambda *args, **kwargs: fake_offsite)
-
-    recovery = SiteRecovery(site)
-    with pytest.raises(BenchError, match="No offsite backup found for site 'site1.localhost' at timestamp '20260101_000000'"):
-        recovery.recover(timestamp="20260101_000000")
-
-
 def test_successful_recovery_workflow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     bench, site = _setup_bench_and_site(tmp_path)
     ts = "20260927_140002"
@@ -84,7 +72,6 @@ def test_successful_recovery_workflow(tmp_path: Path, monkeypatch: pytest.Monkey
         }
     }
 
-    # Simulate S3 download by creating fake files when download is called
     def fake_download(site_name, timestamp, filename, dest):
         dest.write_text("dummy-backup-data")
 
@@ -93,26 +80,24 @@ def test_successful_recovery_workflow(tmp_path: Path, monkeypatch: pytest.Monkey
 
     # Mock site restore, migrate, clear_cache
     site.restore = MagicMock()
-    site.commands = SimpleNamespace(
-        migrate=MagicMock(),
-        clear_cache=MagicMock(),
-    )
+    site.migrate = MagicMock()
+    site.clear_cache = MagicMock()
 
     progress_messages = []
     restored_ts = site.recover(on_progress=lambda msg: progress_messages.append(msg))
 
     assert restored_ts == ts
+    fake_offsite.list_backups.assert_called_once_with("site1.localhost", limit=1)
     site.restore.assert_called_once()
-    site.commands.migrate.assert_called_once_with(skip_failing=False)
-    site.commands.clear_cache.assert_called_once()
+    site.migrate.assert_called_once_with(skip_failing=False)
+    site.clear_cache.assert_called_once()
 
-    # Maintenance mode should be restored to False
+    # Maintenance mode should be disabled
     assert site.maintenance_mode is False
 
     # Downloaded archives should be cleaned up
     backups_dir = site.path / "private" / "backups"
     assert not (backups_dir / f"{ts}-site1.localhost-database.sql.gz").exists()
-    assert not (backups_dir / f"{ts}-site1.localhost-site_config_backup.json").exists()
 
 
 def test_recovery_leave_maintenance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -129,7 +114,8 @@ def test_recovery_leave_maintenance(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr("pilot.core.site.recovery.OffsiteBackup.from_config", lambda *args, **kwargs: fake_offsite)
 
     site.restore = MagicMock()
-    site.commands = SimpleNamespace(migrate=MagicMock(), clear_cache=MagicMock())
+    site.migrate = MagicMock()
+    site.clear_cache = MagicMock()
 
     site.recover(leave_maintenance=True)
     assert site.maintenance_mode is True

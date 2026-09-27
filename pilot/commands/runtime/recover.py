@@ -10,7 +10,7 @@ from pilot.exceptions import BenchError
 @dataclass(kw_only=True)
 class RecoverCommand(Command):
     name: ClassVar[str] = "recover"
-    help: ClassVar[str] = "Disaster Recovery: pull offsite S3 backups and restore bench sites."
+    help: ClassVar[str] = "Disaster Recovery: pull the latest offsite S3 backup and restore bench sites."
     bench_mode: ClassVar[BenchMode] = BenchMode.AUTO
     supports_all_benches: ClassVar[bool] = True
 
@@ -22,25 +22,12 @@ class RecoverCommand(Command):
             metavar="site",
         ),
     ] = None
-    timestamp: Annotated[
-        str | None,
-        Arg(
-            help="Specific backup timestamp (YYYYMMDD_HHMMSS) to restore (defaults to latest).",
-            short="-t",
-            metavar="timestamp",
-        ),
-    ] = None
-    dry_run: Annotated[
-        bool,
-        Arg(help="List available offsite backups from S3 without restoring."),
-    ] = False
     leave_maintenance: Annotated[
         bool,
         Arg(help="Keep site in maintenance mode after recovery completes."),
     ] = False
 
     def run(self) -> None:
-        from pilot.core.site import Site
         from pilot.core.site.recovery import SiteRecovery
 
         bench_label = self.bench.config.name or self.bench.path.name
@@ -58,42 +45,6 @@ class RecoverCommand(Command):
                 else f"Site '{self.site_name}' does not exist in bench '{bench_label}'."
             )
 
-        if self.dry_run:
-            self._run_dry_run(sites, bench_label)
-            return
-
-        self._run_recovery(sites, bench_label)
-
-    def _run_dry_run(self, sites: list[Site], bench_label: str) -> None:
-        from pilot.core.site.recovery import SiteRecovery
-
-        self.report(f"🔍 Inspecting offsite S3 backups for bench '{bench_label}'...\n")
-        for site in sites:
-            self.report(f"Site: {site.config.name}")
-            recovery = SiteRecovery(site)
-            try:
-                backups = recovery.list_available_backups(limit=5)
-                if not backups:
-                    self.report("  (No offsite backups found in S3)")
-                    continue
-                for ts, files in backups.items():
-                    db = files.get("database", "no-db")
-                    extras = []
-                    if "files" in files:
-                        extras.append("files")
-                    if "private_files" in files:
-                        extras.append("private_files")
-                    if "site_config" in files:
-                        extras.append("site_config")
-                    extras_str = f" [{', '.join(extras)}]" if extras else ""
-                    self.report(f"  • {ts} ➔ {db}{extras_str}")
-            except Exception as exc:
-                self.report(f"  Error checking S3: {exc}")
-            self.report("")
-
-    def _run_recovery(self, sites: list[Site], bench_label: str) -> None:
-        from pilot.core.site.recovery import SiteRecovery
-
         successful: list[tuple[str, str]] = []
         failed: list[tuple[str, str]] = []
 
@@ -105,7 +56,6 @@ class RecoverCommand(Command):
             recovery = SiteRecovery(site)
             try:
                 restored_ts = recovery.recover(
-                    timestamp=self.timestamp,
                     leave_maintenance=self.leave_maintenance,
                     on_progress=self.report,
                 )

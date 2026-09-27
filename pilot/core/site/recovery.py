@@ -1,4 +1,4 @@
-"""Disaster Recovery: query, download, and restore offsite S3 backups."""
+"""Disaster Recovery: query and restore the latest offsite S3 backup."""
 
 from __future__ import annotations
 
@@ -26,47 +26,35 @@ class SiteRecovery:
             )
         return OffsiteBackup.from_config(self.site.bench.config.s3, self.site.bench.path)
 
-    def list_available_backups(self, limit: int | None = 10) -> dict[str, dict[str, str]]:
-        """List available offsite backup runs for this site, newest first."""
-        return self.offsite().list_backups(self.site.config.name, limit=limit)
-
-    def resolve_target_backup(self, timestamp: str | None = None) -> tuple[str, dict[str, str]]:
-        """Find the backup run for a specific timestamp, or the newest available."""
+    def get_latest_backup(self) -> tuple[str, dict[str, str]]:
+        """Fetch the latest offsite backup from S3 backups_metadata index."""
         client = self.offsite()
         site_name = self.site.config.name
-
-        if timestamp:
-            files = client.get_backup(site_name, timestamp)
-            if not files:
-                raise BenchError(
-                    f"No offsite backup found for site '{site_name}' at timestamp '{timestamp}'."
-                )
-            return timestamp, files
 
         runs = client.list_backups(site_name, limit=1)
         if not runs:
             raise BenchError(f"No offsite backups found for site '{site_name}' in S3.")
+
         latest_ts, files = next(iter(runs.items()))
         return latest_ts, files
 
     def recover(
         self,
-        timestamp: str | None = None,
         leave_maintenance: bool = False,
         on_progress: Callable[[str], None] = lambda _: None,
     ) -> str:
-        """Pull the latest (or requested) offsite backup from S3 and restore in-place."""
+        """Pull the latest offsite backup from S3 and restore in-place."""
         site_name = self.site.config.name
-        on_progress(f"[{site_name}] Querying offsite S3 backups metadata...")
-        target_ts, files = self.resolve_target_backup(timestamp)
+        on_progress(f"[{site_name}] Querying latest backup from S3 metadata...")
+        target_ts, files = self.get_latest_backup()
 
         db_filename = files.get("database")
         if not db_filename:
             raise BenchError(
-                f"Offsite backup '{target_ts}' for site '{site_name}' does not contain a database dump."
+                f"Latest offsite backup '{target_ts}' for site '{site_name}' does not contain a database dump."
             )
 
-        # 1. Enable maintenance mode to pause incoming traffic & background workers
+        # 1. Enable maintenance mode to pause incoming traffic
         on_progress(f"[{site_name}] Pausing traffic (enabling maintenance mode)...")
         self.site.set_maintenance_mode(True)
 
@@ -77,7 +65,7 @@ class SiteRecovery:
         client = self.offsite()
 
         try:
-            # 2. Download all available backup artifacts from S3
+            # 2. Download backup artifacts from S3
             on_progress(f"[{site_name}] Downloading database dump ({db_filename})...")
             db_path = backup_dir / db_filename
             client.download(site_name, target_ts, db_filename, db_path)
@@ -106,7 +94,7 @@ class SiteRecovery:
                 client.download(site_name, target_ts, site_config_name, site_config_path)
                 downloaded_paths.append(site_config_path)
 
-            # 3. Restore database and public/private files
+            # 3. Restore database and files
             on_progress(f"[{site_name}] Restoring database and files from backup '{target_ts}'...")
             self.site.restore(
                 db_file=str(db_path),
@@ -114,12 +102,12 @@ class SiteRecovery:
                 private_files=str(private_path) if private_path else None,
             )
 
-            # 4. Run schema migration & clear cache
+            # 4. Run schema migrations and clear cache
             on_progress(f"[{site_name}] Running database migrations (bench migrate)...")
-            self.site.commands.migrate(skip_failing=False)
+            self.site.migrate(skip_failing=False)
 
             on_progress(f"[{site_name}] Clearing Redis & site cache...")
-            self.site.commands.clear_cache()
+            self.site.clear_cache()
 
         finally:
             # 5. Clean up downloaded archive files
@@ -129,7 +117,7 @@ class SiteRecovery:
                 except Exception:
                     pass
 
-        # 6. Restore or keep maintenance mode
+        # 6. Resume or keep maintenance mode
         if not leave_maintenance:
             on_progress(f"[{site_name}] Resuming traffic (disabling maintenance mode)...")
             self.site.set_maintenance_mode(False)
