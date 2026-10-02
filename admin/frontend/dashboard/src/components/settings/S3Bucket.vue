@@ -18,6 +18,7 @@ const region = ref('')
 const endpointUrl = ref('')
 const secretKeySet = ref(false)
 const providers = ref<S3ProviderOption[]>([])
+const loadingRegions = ref(false)
 
 const connected = computed(() => Boolean(accessKey.value && bucket.value && secretKeySet.value))
 const providerLabel = computed(
@@ -33,9 +34,28 @@ const regionOptions = computed(
       ?.regions.map((r) => ({ label: r, value: r })) || [],
 )
 
-watch(provider, (_provider, previousProvider) => {
-  if (previousProvider) {
+// Frappe regions come from Central, so they load only when that provider is picked.
+const loadFrappeRegions = async () => {
+  const frappe = providers.value.find((p) => p.value === 'frappe')
+  if (!frappe) return
+
+  loadingRegions.value = true
+  try {
+    frappe.regions = await settingsApi.frappeStorageRegions()
+  } catch (e) {
+    error.value = errorMessage(e, 'Could not read Frappe storage regions from Central.')
+  } finally {
+    loadingRegions.value = false
+  }
+}
+
+// Also on `providers`: a reload after save replaces the list and empties Frappe's regions.
+watch([provider, providers], async ([current], [previous]) => {
+  if (previous && current !== previous) {
     endpointUrl.value = ''
+  }
+  if (current === 'frappe') {
+    await loadFrappeRegions()
   }
   if (!regionOptions.value.some((o) => o.value === region.value)) {
     region.value = regionOptions.value[0]?.value || ''
@@ -164,7 +184,14 @@ onMounted(load)
       />
       <div class="flex sm:flex-row flex-col gap-4">
         <Select label="Provider" v-model="provider" :options="providerOptions" class="w-full" />
-        <Select label="Region" v-model="region" :options="regionOptions" class="w-full" />
+        <Select
+          label="Region"
+          v-model="region"
+          :options="regionOptions"
+          :disabled="loadingRegions"
+          :placeholder="loadingRegions ? 'Loading regions…' : undefined"
+          class="w-full"
+        />
       </div>
 
       <div class="flex sm:flex-row flex-col gap-4">
