@@ -72,24 +72,35 @@ class SiteRecovery:
         for kind, filename in files.items():
             _validate_artifact_filename(filename, kind)
 
-        # Capture the existing isolation state so we can restore it afterwards.
+        # Capture the existing isolation state so we can restore it if setup fails.
         prior_settings = self.site.maintenance_settings
 
         # 1. Enable maintenance mode to pause incoming traffic & background workers.
         on_progress(f"[{site_name}] Pausing traffic (enabling maintenance mode)...")
         self.site.set_maintenance_mode(True)
 
-        # Use a separate temp dir so downloads never touch the site's own backup dir.
-        with tempfile.TemporaryDirectory(prefix="pilot-recovery-") as tmp_str:
-            tmp_dir = Path(tmp_str)
-            client = self.offsite()
+        data_modified = False
+        try:
+            # Use suitable bench storage on the bench disk for temporary downloads
+            # rather than the system /tmp (which may be a small RAM-backed tmpfs).
+            # The hidden prefix (.recovery-) prevents collision with existing local backups.
+            backup_parent = self.site.path / "private" / "backups"
+            backup_parent.mkdir(parents=True, exist_ok=True)
 
-            try:
+            with tempfile.TemporaryDirectory(dir=backup_parent, prefix=".recovery-") as tmp_str:
+                tmp_dir = Path(tmp_str)
+                client = self.offsite()
+
+                # 2. Download all available backup artifacts from S3 into isolated staging directory.
                 db_path = self._download(client, site_name, target_ts, db_filename, tmp_dir, on_progress)
                 public_path = self._maybe_download(client, site_name, target_ts, files.get("files"), tmp_dir, on_progress)
                 private_path = self._maybe_download(client, site_name, target_ts, files.get("private_files"), tmp_dir, on_progress)
                 if files.get("site_config"):
                     self._download(client, site_name, target_ts, files["site_config"], tmp_dir, on_progress)
+
+                # Site data is about to be modified. If any subsequent step fails,
+                # the site must remain isolated to prevent traffic/workers hitting partial data.
+                data_modified = True
 
                 # 3. Restore database and public/private files.
                 on_progress(f"[{site_name}] Restoring database and files from backup '{target_ts}'...")
@@ -106,11 +117,16 @@ class SiteRecovery:
                 on_progress(f"[{site_name}] Clearing Redis & site cache...")
                 self.site.clear_cache()
 
-            except Exception:
-                # Restore pre-recovery isolation state before re-raising.
+        except Exception:
+            if not data_modified:
+                # Setup or download failed before any site data was touched;
+                # restore prior settings so the site isn't stranded in maintenance.
                 self.site.set_maintenance_settings(prior_settings)
-                raise
-        # TemporaryDirectory context exit deletes the temp dir and all downloads.
+            else:
+                # Restore or migration failed after modifying site data;
+                # keep site isolated in maintenance mode to prevent corruption.
+                self.site.set_maintenance_mode(True)
+            raise
 
         # 5. Restore the pre-recovery isolation state, or keep maintenance if requested.
         if leave_maintenance:

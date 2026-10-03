@@ -25,7 +25,7 @@ Bench commands with `--bench NAME` can run from outside the bench directory. `Be
 
 ### pilot recover — Disaster Recovery
 
-**Prerequisites:** S3 must be configured in `bench.toml` (`[s3]` section with `bucket`, `endpoint_url`, `access_key`, `secret_key`). Run `pilot stop` first to quiesce traffic and background workers before recovering.
+**Prerequisites:** S3 offsite backups must be configured in `bench.toml` (`[s3]` section with `bucket`, `endpoint_url`, `access_key`, `secret_key`). Ensure database (MariaDB/PostgreSQL) and Redis are running before recovery begins.
 
 **Flags:**
 
@@ -36,30 +36,50 @@ Bench commands with `--bench NAME` can run from outside the bench directory. `Be
 | `--dry-run` | | List available offsite backups from S3 without restoring anything. |
 | `--leave-maintenance` | | Keep the site in maintenance mode after recovery completes (useful when you want to inspect before resuming traffic). |
 
-**Workflow:**
+**Process & Redis Management during Recovery:**
+
+Post-restore schema migration (`bench migrate`) and cache clearing require the bench Redis instance (`redis_cache`) to be accessible. Because running `pilot stop` shuts down all workload processes including Redis, use one of the following methods to quiesce live traffic and background workers while ensuring Redis is operational:
+
+- **Stop web and workers while leaving Redis active (systemd):**
+  ```bash
+  systemctl --user stop <bench>-web.service <bench>-worker.service <bench>-socketio.service
+  ```
+- **If `pilot stop` was already executed:** Restart the bench Redis services prior to recovery:
+  ```bash
+  systemctl --user start <bench>-redis_cache.service <bench>-redis_queue.service
+  ```
+- **Supervisor environments:**
+  ```bash
+  supervisorctl stop <bench>:web <bench>:worker <bench>:socketio
+  # Or start Redis if pilot stop was used:
+  supervisorctl start <bench>:redis_cache <bench>:redis_queue
+  ```
+
+**Workflow Examples:**
 
 ```bash
-# Single-bench (auto-detected when inside bench directory):
-pilot stop                                  # quiesce traffic and workers
-pilot recover                               # restore all sites from latest S3 backup
-pilot start                                 # resume production traffic
+# 1. Quiesce web and workers, ensure Redis is up:
+systemctl --user stop <bench>-web.service <bench>-worker.service <bench>-socketio.service
 
-# Multi-bench setups (explicit bench selection):
-pilot --bench <bench-name> stop
+# 2. Recover all sites in the bench to their latest S3 snapshot:
+pilot recover
+
+# 3. Recover a specific site to a point-in-time backup:
+pilot recover --site site1.localhost --timestamp 20260927_140002
+
+# 4. Inspect available offsite backups without restoring (dry run):
+pilot recover --dry-run
+
+# 5. Multi-bench target selection:
 pilot --bench <bench-name> recover
-pilot --bench <bench-name> start
 
-# Recover a specific site to a point-in-time timestamp on a specific bench:
-pilot --bench <bench-name> recover --site <site-name> --timestamp YYYYMMDD_HHMMSS
-
-# Inspect available backups without restoring (dry run):
-pilot --bench <bench-name> recover --dry-run
-
-# All benches recovery:
-pilot -b all recover
+# 6. Resume live production traffic and workers:
+pilot start
 ```
 
-Recovery automatically enables maintenance mode during restore, then restores the site's prior isolation state on success (or failure). If the site was already in maintenance mode before recovery, that state is preserved.
+**Isolation & Failure Safety:**
+
+Recovery automatically enables maintenance mode and pauses the background scheduler while restoring. If setup or artifact retrieval fails before site data is touched, the prior isolation state is immediately restored so the site is not stranded. If restore or migration fails after site data has been modified, the site is kept strictly isolated in maintenance mode to prevent incoming web traffic and scheduled background jobs from accessing incomplete or unmigrated data.
 
 
 Some runtime commands support all benches when invoked with the CLI option for all-bench execution.

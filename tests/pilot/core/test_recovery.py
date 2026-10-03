@@ -177,3 +177,77 @@ def test_recovery_rejects_path_traversal_filename(tmp_path: Path, monkeypatch: p
 
     # No download must have been attempted.
     fake_offsite.download.assert_not_called()
+
+
+def test_recovery_setup_failure_does_not_strand_site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """If download or setup fails before data is modified, prior isolation state must be restored."""
+    _bench, site = _setup_bench_and_site(tmp_path)
+    ts = "20260927_140002"
+
+    fake_offsite = MagicMock()
+    fake_offsite.list_backups.return_value = {ts: {"database": f"{ts}-site1.localhost-database.sql.gz"}}
+    fake_offsite.download.side_effect = RuntimeError("S3 connection drop")
+    monkeypatch.setattr("pilot.core.site.recovery.OffsiteBackup.from_config", lambda *args, **kwargs: fake_offsite)
+
+    with pytest.raises(RuntimeError, match="S3 connection drop"):
+        site.recover()
+
+    # Prior state (maintenance=0, pause_scheduler=0) must be restored, not left stranded in maintenance.
+    assert site.maintenance_mode is False
+    assert site.maintenance_settings == {"maintenance_mode": 0, "pause_scheduler": 0}
+
+
+def test_recovery_post_restore_failure_keeps_site_isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """If migration or restore fails after data is modified, site must remain isolated in maintenance mode."""
+    _bench, site = _setup_bench_and_site(tmp_path)
+    ts = "20260927_140002"
+
+    fake_offsite = MagicMock()
+    fake_offsite.list_backups.return_value = {ts: {"database": f"{ts}-site1.localhost-database.sql.gz"}}
+    fake_offsite.download.side_effect = lambda site_name, timestamp, filename, dest: dest.write_text("dummy")
+    monkeypatch.setattr("pilot.core.site.recovery.OffsiteBackup.from_config", lambda *args, **kwargs: fake_offsite)
+
+    site.restore = MagicMock()
+    # Migration fails after database has already been restored!
+    site.migrate = MagicMock(side_effect=BenchError("Migration failed"))
+    site.clear_cache = MagicMock()
+
+    with pytest.raises(BenchError, match="Migration failed"):
+        site.recover()
+
+    # Site data was altered, so the site MUST remain isolated to prevent traffic/workers hitting bad state.
+    assert site.maintenance_mode is True
+    assert site.maintenance_settings == {"maintenance_mode": 1, "pause_scheduler": 1}
+
+
+def test_recovery_stages_downloads_in_bench_storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Downloads must stage inside the site's private/backups directory on bench storage, not system /tmp."""
+    _bench, site = _setup_bench_and_site(tmp_path)
+    ts = "20260927_140002"
+
+    recorded_destinations: list[Path] = []
+    fake_offsite = MagicMock()
+    fake_offsite.list_backups.return_value = {ts: {"database": f"{ts}-site1.localhost-database.sql.gz"}}
+
+    def fake_download(site_name, timestamp, filename, dest):
+        recorded_destinations.append(dest)
+        dest.write_text("dummy")
+
+    fake_offsite.download.side_effect = fake_download
+    monkeypatch.setattr("pilot.core.site.recovery.OffsiteBackup.from_config", lambda *args, **kwargs: fake_offsite)
+
+    site.restore = MagicMock()
+    site.migrate = MagicMock(return_value="")
+    site.clear_cache = MagicMock()
+
+    site.recover()
+
+    assert recorded_destinations
+    expected_parent = site.path / "private" / "backups"
+    for dest in recorded_destinations:
+        # Must be located in site's private/backups directory on bench disk
+        assert expected_parent in dest.parents
+        # Must be inside a hidden temporary recovery folder
+        assert dest.parent.name.startswith(".recovery-")
+        # Temporary folder should be cleaned up after recovery
+        assert not dest.exists()
