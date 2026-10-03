@@ -96,7 +96,6 @@ class RecoverCommand(Command):
 
         successful: list[tuple[str, str]] = []
         failed: list[tuple[str, str]] = []
-
         self.report(f"🚀 Starting Disaster Recovery for bench '{bench_label}'...")
 
         for site in sites:
@@ -115,6 +114,14 @@ class RecoverCommand(Command):
                 failed.append((site_name, str(exc)))
                 self.report(f"❌ Failed to recover site '{site_name}': {exc}")
 
+        self._report_recovery_summary(successful, failed, bench_label)
+
+    def _report_recovery_summary(
+        self,
+        successful: list[tuple[str, str]],
+        failed: list[tuple[str, str]],
+        bench_label: str,
+    ) -> None:
         self.report("\n==================== Recovery Summary ====================")
         for s_name, ts in successful:
             self.report(f"  ✅ {s_name}: Restored snapshot {ts}")

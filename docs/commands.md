@@ -42,24 +42,24 @@ Post-restore schema migration (`bench migrate`) and cache clearing require the b
 
 - **Stop web and workers while leaving Redis active (systemd):**
   ```bash
-  systemctl --user stop <bench>-web.service <bench>-worker.service <bench>-socketio.service
+  systemctl --user stop <bench>-web.service <bench>-worker_pool.service <bench>-socketio.service
   ```
-- **If `pilot stop` was already executed:** Restart the bench Redis services prior to recovery:
+- **If `pilot stop` was already executed (systemd):** Restart the bench Redis services prior to recovery:
   ```bash
   systemctl --user start <bench>-redis_cache.service <bench>-redis_queue.service
   ```
-- **Supervisor environments:**
+- **Supervisor environments (using bench-specific config at `<bench-path>/config/services/supervisord.conf`):**
   ```bash
-  supervisorctl stop <bench>:web <bench>:worker <bench>:socketio
+  supervisorctl -c <bench-path>/config/services/supervisord.conf stop <bench>:<bench>-web <bench>:<bench>-socketio <bench>:<bench>-worker*
   # Or start Redis if pilot stop was used:
-  supervisorctl start <bench>:redis_cache <bench>:redis_queue
+  supervisorctl -c <bench-path>/config/services/supervisord.conf start <bench>:<bench>-redis-cache <bench>:<bench>-redis-queue
   ```
 
 **Workflow Examples:**
 
 ```bash
 # 1. Quiesce web and workers, ensure Redis is up:
-systemctl --user stop <bench>-web.service <bench>-worker.service <bench>-socketio.service
+systemctl --user stop <bench>-web.service <bench>-worker_pool.service <bench>-socketio.service
 
 # 2. Recover all sites in the bench to their latest S3 snapshot:
 pilot recover
