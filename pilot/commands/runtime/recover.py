@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Annotated, ClassVar
+from typing import TYPE_CHECKING, Annotated, ClassVar
 
 from pilot.commands import Arg, BenchMode, Command
 from pilot.exceptions import BenchError
+
+if TYPE_CHECKING:
+    from pilot.core.site import Site
 
 
 @dataclass(kw_only=True)
@@ -14,20 +17,20 @@ class RecoverCommand(Command):
     bench_mode: ClassVar[BenchMode] = BenchMode.AUTO
     supports_all_benches: ClassVar[bool] = True
 
-    site_name: Annotated[
+    site: Annotated[
         str | None,
         Arg(
             help="Specific site name to recover (defaults to all sites in bench).",
-            short="-s",
-            metavar="site",
+            short="s",
+            metavar="SITE",
         ),
     ] = None
     timestamp: Annotated[
         str | None,
         Arg(
             help="Specific backup timestamp (YYYYMMDD_HHMMSS) to restore (defaults to latest).",
-            short="-t",
-            metavar="timestamp",
+            short="t",
+            metavar="TIMESTAMP",
         ),
     ] = None
     dry_run: Annotated[
@@ -40,9 +43,6 @@ class RecoverCommand(Command):
     ] = False
 
     def run(self) -> None:
-        from pilot.core.site import Site
-        from pilot.core.site.recovery import SiteRecovery
-
         bench_label = self.bench.config.name or self.bench.path.name
 
         if not self.bench.config.s3.is_configured:
@@ -50,12 +50,12 @@ class RecoverCommand(Command):
                 f"S3 offsite backups are not configured in bench.toml for '{bench_label}'."
             )
 
-        sites = [self.bench.site(self.site_name)] if self.site_name else self.bench.sites()
+        sites = [self.bench.site(self.site)] if self.site else self.bench.sites()
         if not sites:
             raise BenchError(
                 f"No sites found in bench '{bench_label}'."
-                if not self.site_name
-                else f"Site '{self.site_name}' does not exist in bench '{bench_label}'."
+                if not self.site
+                else f"Site '{self.site}' does not exist in bench '{bench_label}'."
             )
 
         if self.dry_run:
@@ -123,5 +123,4 @@ class RecoverCommand(Command):
 
         if failed:
             raise BenchError(f"Disaster Recovery failed for: {', '.join(f[0] for f in failed)}")
-        else:
-            self.report(f"\n🎉 Disaster Recovery completed successfully for bench '{bench_label}'!")
+        self.report(f"\n🎉 Disaster Recovery completed successfully for bench '{bench_label}'!")

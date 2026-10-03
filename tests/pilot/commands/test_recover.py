@@ -6,11 +6,26 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from pilot.config import BenchConfig, S3Config, SiteConfig
-from pilot.core.site import Site
-from pilot.exceptions import BenchError
-from pilot.internal.cli.command import add_command_arguments, command_from_args
 from pilot.commands.runtime.recover import RecoverCommand
+from pilot.config import SiteConfig
+from pilot.core.site import Site
+from pilot.internal.cli.command import add_command_arguments, command_from_args
+
+
+def _bench_config(s3_configured: bool = True) -> SimpleNamespace:
+    s3 = (
+        SimpleNamespace(
+            is_configured=True,
+            bucket="my-bucket",
+            endpoint_url="https://s3.example.com",
+            access_key="k",
+            secret_key="s",
+            region="us-east-1",
+        )
+        if s3_configured
+        else SimpleNamespace(is_configured=False, bucket="")
+    )
+    return SimpleNamespace(name="test-bench", s3=s3)
 
 
 def _parse_recover(argv: list[str], bench) -> RecoverCommand:
@@ -20,9 +35,9 @@ def _parse_recover(argv: list[str], bench) -> RecoverCommand:
 
 
 def test_recover_command_flags(tmp_path: Path) -> None:
-    bench = SimpleNamespace(path=tmp_path, sites_path=tmp_path / "sites", config=BenchConfig())
+    bench = SimpleNamespace(path=tmp_path, sites_path=tmp_path / "sites", config=_bench_config())
     cmd = _parse_recover(["--site", "mysite.localhost", "-t", "20260927_140002", "--dry-run", "--leave-maintenance"], bench)
-    assert cmd.site_name == "mysite.localhost"
+    assert cmd.site == "mysite.localhost"
     assert cmd.timestamp == "20260927_140002"
     assert cmd.dry_run is True
     assert cmd.leave_maintenance is True
@@ -38,10 +53,7 @@ def test_recover_command_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     bench = SimpleNamespace(
         path=bench_dir,
         sites_path=sites_dir,
-        config=BenchConfig(
-            name="test-bench",
-            s3=S3Config(bucket="my-bucket", endpoint_url="https://s3.example.com", access_key="k", secret_key="s"),
-        ),
+        config=_bench_config(),
     )
     site = Site(SiteConfig(name="site1.localhost", apps=[]), bench)
     bench.sites = lambda: [site]
@@ -77,10 +89,7 @@ def test_recover_command_execution(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     bench = SimpleNamespace(
         path=bench_dir,
         sites_path=sites_dir,
-        config=BenchConfig(
-            name="test-bench",
-            s3=S3Config(bucket="my-bucket", endpoint_url="https://s3.example.com", access_key="k", secret_key="s"),
-        ),
+        config=_bench_config(),
     )
     site = Site(SiteConfig(name="site1.localhost", apps=[]), bench)
     bench.sites = lambda: [site]

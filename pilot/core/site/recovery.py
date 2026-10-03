@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -22,7 +23,8 @@ class SiteRecovery:
     def offsite(self) -> OffsiteBackup:
         if not self.site.bench.config.s3.is_configured:
             raise BenchError(
-                f"S3 offsite backups are not configured for bench '{self.site.bench.config.name or self.site.bench.path.name}'."
+                f"S3 offsite backups are not configured for bench "
+                f"'{self.site.bench.config.name or self.site.bench.path.name}'."
             )
         return OffsiteBackup.from_config(self.site.bench.config.s3, self.site.bench.path)
 
@@ -66,74 +68,96 @@ class SiteRecovery:
                 f"Offsite backup '{target_ts}' for site '{site_name}' does not contain a database dump."
             )
 
-        # 1. Enable maintenance mode to pause incoming traffic & background workers
+        # Validate every artifact filename before use to prevent path traversal.
+        for kind, filename in files.items():
+            _validate_artifact_filename(filename, kind)
+
+        # Capture the existing isolation state so we can restore it afterwards.
+        prior_settings = self.site.maintenance_settings
+
+        # 1. Enable maintenance mode to pause incoming traffic & background workers.
         on_progress(f"[{site_name}] Pausing traffic (enabling maintenance mode)...")
         self.site.set_maintenance_mode(True)
 
-        backup_dir = self.site.path / "private" / "backups"
-        backup_dir.mkdir(parents=True, exist_ok=True)
+        # Use a separate temp dir so downloads never touch the site's own backup dir.
+        with tempfile.TemporaryDirectory(prefix="pilot-recovery-") as tmp_str:
+            tmp_dir = Path(tmp_str)
+            client = self.offsite()
 
-        downloaded_paths: list[Path] = []
-        client = self.offsite()
+            try:
+                db_path = self._download(client, site_name, target_ts, db_filename, tmp_dir, on_progress)
+                public_path = self._maybe_download(client, site_name, target_ts, files.get("files"), tmp_dir, on_progress)
+                private_path = self._maybe_download(client, site_name, target_ts, files.get("private_files"), tmp_dir, on_progress)
+                if files.get("site_config"):
+                    self._download(client, site_name, target_ts, files["site_config"], tmp_dir, on_progress)
 
-        try:
-            # 2. Download all available backup artifacts from S3
-            on_progress(f"[{site_name}] Downloading database dump ({db_filename})...")
-            db_path = backup_dir / db_filename
-            client.download(site_name, target_ts, db_filename, db_path)
-            downloaded_paths.append(db_path)
+                # 3. Restore database and public/private files.
+                on_progress(f"[{site_name}] Restoring database and files from backup '{target_ts}'...")
+                self.site.restore(
+                    db_file=str(db_path),
+                    public_files=str(public_path) if public_path else None,
+                    private_files=str(private_path) if private_path else None,
+                )
 
-            public_files_name = files.get("files")
-            public_path: Path | None = None
-            if public_files_name:
-                on_progress(f"[{site_name}] Downloading public files ({public_files_name})...")
-                public_path = backup_dir / public_files_name
-                client.download(site_name, target_ts, public_files_name, public_path)
-                downloaded_paths.append(public_path)
+                # 4. Run schema migration & clear cache via Site directly.
+                on_progress(f"[{site_name}] Running database migrations (bench migrate)...")
+                self.site.migrate(skip_failing=False)
 
-            private_files_name = files.get("private_files")
-            private_path: Path | None = None
-            if private_files_name:
-                on_progress(f"[{site_name}] Downloading private files ({private_files_name})...")
-                private_path = backup_dir / private_files_name
-                client.download(site_name, target_ts, private_files_name, private_path)
-                downloaded_paths.append(private_path)
+                on_progress(f"[{site_name}] Clearing Redis & site cache...")
+                self.site.clear_cache()
 
-            site_config_name = files.get("site_config")
-            if site_config_name:
-                on_progress(f"[{site_name}] Downloading site config backup ({site_config_name})...")
-                site_config_path = backup_dir / site_config_name
-                client.download(site_name, target_ts, site_config_name, site_config_path)
-                downloaded_paths.append(site_config_path)
+            except Exception:
+                # Restore pre-recovery isolation state before re-raising.
+                self.site.set_maintenance_settings(prior_settings)
+                raise
+        # TemporaryDirectory context exit deletes the temp dir and all downloads.
 
-            # 3. Restore database and public/private files
-            on_progress(f"[{site_name}] Restoring database and files from backup '{target_ts}'...")
-            self.site.restore(
-                db_file=str(db_path),
-                public_files=str(public_path) if public_path else None,
-                private_files=str(private_path) if private_path else None,
-            )
-
-            # 4. Run schema migration & clear cache
-            on_progress(f"[{site_name}] Running database migrations (bench migrate)...")
-            self.site.commands.migrate(skip_failing=False)
-
-            on_progress(f"[{site_name}] Clearing Redis & site cache...")
-            self.site.commands.clear_cache()
-
-        finally:
-            # 5. Clean up downloaded archive files
-            for path in downloaded_paths:
-                try:
-                    path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-
-        # 6. Restore or keep maintenance mode
-        if not leave_maintenance:
-            on_progress(f"[{site_name}] Resuming traffic (disabling maintenance mode)...")
-            self.site.set_maintenance_mode(False)
-        else:
+        # 5. Restore the pre-recovery isolation state, or keep maintenance if requested.
+        if leave_maintenance:
             on_progress(f"[{site_name}] Site left in maintenance mode as requested.")
+        else:
+            on_progress(f"[{site_name}] Restoring prior isolation state...")
+            self.site.set_maintenance_settings(prior_settings)
 
         return target_ts
+
+    def _download(
+        self,
+        client: OffsiteBackup,
+        site_name: str,
+        timestamp: str,
+        filename: str,
+        dest_dir: Path,
+        on_progress: Callable[[str], None],
+    ) -> Path:
+        on_progress(f"[{site_name}] Downloading {filename}...")
+        dest = dest_dir / filename
+        client.download(site_name, timestamp, filename, dest)
+        return dest
+
+    def _maybe_download(
+        self,
+        client: OffsiteBackup,
+        site_name: str,
+        timestamp: str,
+        filename: str | None,
+        dest_dir: Path,
+        on_progress: Callable[[str], None],
+    ) -> Path | None:
+        if not filename:
+            return None
+        return self._download(client, site_name, timestamp, filename, dest_dir, on_progress)
+
+
+def _validate_artifact_filename(filename: str, kind: str) -> None:
+    """Raise BenchError if filename would escape any download directory."""
+    if (
+        not filename
+        or filename.startswith("/")
+        or filename.startswith(".")
+        or "/" in filename
+        or "\\" in filename
+    ):
+        raise BenchError(
+            f"Offsite backup metadata contains an unsafe {kind} filename: {filename!r}."
+        )

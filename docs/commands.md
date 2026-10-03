@@ -21,6 +21,46 @@ Bench commands with `--bench NAME` can run from outside the bench directory. `Be
 - `pilot restart`: restart the production workload.
 - `pilot build`: build assets or download prebuilt assets when available. The queued build task (`pilot.tasks.build.BuildTask`) always forces a full rebuild, since a queued/CLI-triggered build is expected to reflect current source rather than reuse a prebuilt bundle.
 - `pilot frappe -- ...`: pass through to Frappe's bench helper.
+- `pilot recover`: pull the latest offsite S3 backup and restore the site in-place. Designed for the **stop → recover → start** Disaster Recovery workflow.
+
+### pilot recover — Disaster Recovery
+
+**Prerequisites:** S3 must be configured in `bench.toml` (`[s3]` section with `bucket`, `endpoint_url`, `access_key`, `secret_key`). Run `pilot stop` first to quiesce traffic and background workers before recovering.
+
+**Flags:**
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--site SITE` | `-s` | Recover a specific site. Defaults to all sites in the bench. |
+| `--timestamp YYYYMMDD_HHMMSS` | `-t` | Restore a specific point-in-time backup. Defaults to the latest available. |
+| `--dry-run` | | List available offsite backups from S3 without restoring anything. |
+| `--leave-maintenance` | | Keep the site in maintenance mode after recovery completes (useful when you want to inspect before resuming traffic). |
+
+**Workflow:**
+
+```bash
+# Single-bench (auto-detected when inside bench directory):
+pilot stop                                  # quiesce traffic and workers
+pilot recover                               # restore all sites from latest S3 backup
+pilot start                                 # resume production traffic
+
+# Multi-bench setups (explicit bench selection):
+pilot --bench <bench-name> stop
+pilot --bench <bench-name> recover
+pilot --bench <bench-name> start
+
+# Recover a specific site to a point-in-time timestamp on a specific bench:
+pilot --bench <bench-name> recover --site <site-name> --timestamp YYYYMMDD_HHMMSS
+
+# Inspect available backups without restoring (dry run):
+pilot --bench <bench-name> recover --dry-run
+
+# All benches recovery:
+pilot -b all recover
+```
+
+Recovery automatically enables maintenance mode during restore, then restores the site's prior isolation state on success (or failure). If the site was already in maintenance mode before recovery, that state is preserved.
+
 
 Some runtime commands support all benches when invoked with the CLI option for all-bench execution.
 
