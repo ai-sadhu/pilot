@@ -44,7 +44,7 @@ const storageUsed = computed(() => storageLabel(siteName))
 setBreadcrumbs([{ label: 'Sites', route: { name: 'Sites' } }, { label: siteName }])
 
 const STATUS_THEMES: Record<string, BadgeProps['theme']> = {
-  online: 'gray',
+  online: 'green',
   broken: 'red',
   offline: 'amber',
   provisioning: 'blue',

@@ -15,6 +15,9 @@ export const settingsApi = {
 
   myIp: (): Promise<ClientAddress> => request.get('network/client').json(),
 
+  frappeStorageRegions: (): Promise<string[]> =>
+    request.get('settings/s3/frappe-regions').json(),
+
   llmModels: (provider: string, apiKey = '', apiBase = ''): Promise<string[]> =>
     request
       .post('settings/llm/models', { json: { provider, api_key: apiKey, api_base: apiBase } })
