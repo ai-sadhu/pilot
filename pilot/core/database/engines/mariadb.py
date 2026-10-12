@@ -63,7 +63,7 @@ class MariaDB(Database):
                 database=self._database or None,
                 unix_socket=self._socket,
                 connect_timeout=self._connect_timeout,
-                cursorclass=getattr(getattr(pymysql, "cursors", None), "DictCursor", None),
+                cursorclass=pymysql.cursors.DictCursor,
             )
         except pymysql.Error as exc:
             raise DatabaseError(str(exc)) from exc
