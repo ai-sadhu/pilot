@@ -61,7 +61,7 @@ def align_and_append_rows(
         return all_columns
 
     col_map = {col: i for i, col in enumerate(result_columns)}
-    if not all(c in col_map for c in all_columns):
+    if set(result_columns) != set(all_columns):
         raise DatabaseError(
             f"Site '{site_name}' returned incompatible columns: {list(result_columns)} vs {all_columns}"
         )
