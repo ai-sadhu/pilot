@@ -37,13 +37,16 @@ const showSchema = ref(false)
 const schema = ref<TableSchema[]>([])
 const editorRef = ref<InstanceType<typeof SQLCodeEditor> | null>(null)
 
-const siteOptions = computed(() => [
-  { label: 'Select site', value: '' },
-  ...sites.value.map((s) => ({ label: s.name, value: s.name })),
-])
+const siteOptions = computed(() => {
+  const options = [{ label: 'Select site', value: '' }]
+  if (sites.value.length > 0) {
+    options.push({ label: 'All Sites', value: 'all' })
+  }
+  return [...options, ...sites.value.map((s) => ({ label: s.name, value: s.name }))]
+})
 
 const selectedSiteDbType = computed(
-  () => sites.value.find((s) => s.name === selectedSite.value)?.db_type || 'mariadb',
+  () => sites.value.find((s) => s.name === selectedSite.value)?.db_type || sites.value[0]?.db_type || 'mariadb',
 )
 
 const modeOptions = [
@@ -69,7 +72,7 @@ const pageOptions = [
 ]
 
 const resultColumns = computed(() => {
-  if (!currentResult.value) return []
+  if (!currentResult.value?.columns) return []
   return [
     { key: 'sqlTableIndex', label: '#', class: 'w-8 tabular-nums text-ink-gray-4 text-xs' },
     ...currentResult.value.columns.map((c) => ({ key: c, label: c })),
@@ -77,7 +80,7 @@ const resultColumns = computed(() => {
 })
 
 const paginatedRowObjects = computed<Record<string, unknown>[]>(() => {
-  if (!currentResult.value) return []
+  if (!currentResult.value?.columns || !currentResult.value?.rows) return []
   const { columns, rows } = currentResult.value
   const offset = (page.value - 1) * perPage.value
   return rows.slice(offset, offset + perPage.value).map((row, i) => ({
@@ -87,14 +90,14 @@ const paginatedRowObjects = computed<Record<string, unknown>[]>(() => {
 })
 
 const totalPages = computed(() =>
-  currentResult.value ? Math.ceil(currentResult.value.row_count / perPage.value) : 0,
+  currentResult.value?.row_count != null ? Math.ceil(currentResult.value.row_count / perPage.value) : 0,
 )
 
 const rowRange = computed(() => {
-  if (!currentResult.value) return ''
+  if (!currentResult.value?.row_count) return '0–0'
   const start = (page.value - 1) * perPage.value + 1
   const end = Math.min(page.value * perPage.value, currentResult.value.row_count)
-  return currentResult.value.row_count ? `${start}–${end}` : '0–0'
+  return `${start}–${end}`
 })
 
 // ── Query execution ───────────────────────────────────────────────────────────
@@ -164,7 +167,7 @@ const executeQuery = async (raw: string) => {
 // ── CSV export ────────────────────────────────────────────────────────────────
 
 const exportCsv = () => {
-  if (!currentResult.value) return
+  if (!currentResult.value?.columns || !currentResult.value?.rows) return
   const { columns, rows } = currentResult.value
   const escape = (v: unknown) => {
     if (v === null) return ''
@@ -172,9 +175,10 @@ const exportCsv = () => {
     return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s
   }
   const csv = [columns.join(','), ...rows.map((r) => r.map(escape).join(','))].join('\n')
+  const downloadName = selectedSite.value === 'all' ? 'all-sites-query.csv' : `${selectedSite.value}-query.csv`
   const a = Object.assign(document.createElement('a'), {
     href: URL.createObjectURL(new Blob([csv], { type: 'text/csv' })),
-    download: `${selectedSite.value}-query.csv`,
+    download: downloadName,
   })
   a.click()
   URL.revokeObjectURL(a.href)
@@ -184,8 +188,10 @@ const exportCsv = () => {
 
 const refreshSchema = async () => {
   if (!selectedSite.value) return
+  const targetSite = selectedSite.value === 'all' ? sites.value[0]?.name : selectedSite.value
+  if (!targetSite) return
   try {
-    const data = await databaseApi.schema(selectedSite.value)
+    const data = await databaseApi.schema(targetSite)
     if (!hasApiError(data)) schema.value = data
   } catch {
     // keep last known schema on failure
@@ -227,6 +233,7 @@ onMounted(async () => {
   try {
     sites.value = await databaseApi.sites()
     if (!selectedSite.value && sites.value.length === 1) selectedSite.value = sites.value[0].name
+    if (selectedSite.value) refreshSchema()
   } catch {}
 })
 </script>
@@ -307,6 +314,23 @@ onMounted(async () => {
       </template>
     </Alert>
 
+    <Alert
+      v-if="currentResult?.failed_sites?.length"
+      class="border border-outline-gray-2"
+      theme="amber"
+      title="Partial completion on some sites"
+      :dismissible="false"
+    >
+      <template #description>
+        <p class="text-xs mb-1">The query did not complete on the following sites:</p>
+        <ul class="list-disc list-inside font-mono text-xs space-y-0.5">
+          <li v-for="fail in currentResult.failed_sites" :key="fail.site">
+            <span class="font-semibold">{{ fail.site }}:</span> {{ fail.error }}
+          </li>
+        </ul>
+      </template>
+    </Alert>
+
     <template v-if="results.length && !error">
       <TabButtons
         v-if="results.length > 1"
@@ -318,7 +342,7 @@ onMounted(async () => {
 
       <div v-if="currentResult" class="border rounded-4 overflow-hidden">
         <div
-          v-if="!currentResult.columns.length"
+          v-if="!currentResult.columns?.length"
           class="flex justify-center items-center gap-2 py-8 text-ink-gray-6 text-sm"
         >
           <span class="size-4 text-ink-green-3 lucide-check-circle" />
@@ -408,7 +432,7 @@ onMounted(async () => {
   <Dialog v-model="showConfirm" title="Run in Read/Write mode">
     <p class="text-ink-gray-7 text-sm">
       This query will run in <strong>Read/Write</strong> mode and any changes will be committed to
-      the database. Are you sure you want to continue?
+      {{ selectedSite === 'all' ? 'all site databases' : 'the database' }}. Are you sure you want to continue?
     </p>
 
     <pre

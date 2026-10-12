@@ -48,19 +48,25 @@ class MariaDB(Database):
         self._connect_timeout = connect_timeout
 
     def _connect(self):
-        import pymysql
-        import pymysql.cursors
+        try:
+            import pymysql
+            import pymysql.cursors
+        except ImportError as exc:
+            raise DatabaseError("pymysql is not installed.") from exc
 
-        return pymysql.connect(
-            host=self._host,
-            port=self._port,
-            user=self._user,
-            password=self._password,
-            database=self._database or None,
-            unix_socket=self._socket,
-            connect_timeout=self._connect_timeout,
-            cursorclass=pymysql.cursors.DictCursor,
-        )
+        try:
+            return pymysql.connect(
+                host=self._host,
+                port=self._port,
+                user=self._user,
+                password=self._password,
+                database=self._database or None,
+                unix_socket=self._socket,
+                connect_timeout=self._connect_timeout,
+                cursorclass=getattr(getattr(pymysql, "cursors", None), "DictCursor", None),
+            )
+        except pymysql.Error as exc:
+            raise DatabaseError(str(exc)) from exc
 
     def quote_identifier(self, name: str) -> str:
         return "`{}`".format(name.replace("`", ""))

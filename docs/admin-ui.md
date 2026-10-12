@@ -53,6 +53,15 @@ The update-status button is opt-in per route through `meta.showUpdateStatus`.
 
 The UI should treat task ids as the handle for long work.
 
+## SQL Playground
+
+The SQL Playground screen allows administrators to execute queries against tenant databases.
+
+- **Site Selection**: Users can choose a specific site or select **All Sites** (`all`) to run bench-wide analytical queries.
+- **`${site}` Macro**: Supports the dynamic `${site}` variable macro within the query workspace, matching CLI functionality (`pilot --site all mariadb --execute "..."`).
+- **Safety & Mode Controls**: Supports Read-only (default) and Read/Write modes. Read/Write actions show a confirmation prompt before running.
+- **Partial Completion**: When executing across all sites, individual site failures appear in a warning banner. Read-only queries skip missing tables without showing those sites in the banner.
+
 ## Setup
 
 The Frappe branch picker lists the branches reported by the repository. Type a different full branch name and select `Use branch` to choose it. `Set up bench` saves the selection before setup starts. The wizard restores a saved custom branch even when the repository list does not contain it.

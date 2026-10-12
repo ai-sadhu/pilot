@@ -103,6 +103,8 @@ def make_site_database(
     config = read_site_config(bench_root, site_name)
     db_type = config.get("db_type", "mariadb")
     if db_type == "postgres":
+        if "db_user" not in config or "db_password" not in config or "db_name" not in config:
+            raise DatabaseError(f"Site '{site_name}' has incomplete database configuration.")
         return PostgreSQL(
             host=config.get("db_host", "localhost"),
             port=int(config.get("db_port", 5432)),
@@ -115,6 +117,8 @@ def make_site_database(
         # Frappe stores SQLite under sites/<site>/db/, not directly in the site folder.
         db_file = Path(bench_root) / "sites" / site_name / "db" / f"{config.get('db_name', site_name)}.db"
         return SQLite(db_path=str(db_file))
+    if "db_user" not in config or "db_password" not in config or "db_name" not in config:
+        raise DatabaseError(f"Site '{site_name}' has incomplete database configuration.")
     return MariaDB(
         host=config.get("db_host", "localhost"),
         port=int(config.get("db_port", 3306)),

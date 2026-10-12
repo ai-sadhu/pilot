@@ -175,6 +175,17 @@ The first three sections come from MariaDB's Performance Schema, so they are emp
 
 `?site=<name>` narrows every section to that site's schema; without it the report covers every user schema on the server, system schemas excluded. Only MariaDB implements it - other engines raise, and the route answers 422.
 
+### Database Queries
+
+`POST /database/queries` executes a raw SQL statement against a tenant database or bench-wide across all sites. The request body accepts `site` (`string`), `query` (`string`), and `read_only` (`boolean`, default `true`).
+
+- **Single site**: Executes against the site's database, resolving any `${site}` macros to the site name.
+- **Bench-wide (`site: "all"`)**: Discovers all active sites on the bench, substitutes `${site}` / `$site` macros per tenant, and executes across each database:
+  - Output rows from subsequent sites are mapped by column name to match the first site's column order. Incompatible column sets are rejected.
+  - Read-only queries gracefully skip individual sites where the queried table does not exist (e.g. app-specific DocTypes).
+  - If writes or execution fail on a subset of sites, the response returns the aggregated dataset along with a `failed_sites` array listing each failed site and its error message to avoid obscuring partial state.
+  - If no sites succeed, the endpoint returns 422 with the first error message. If no sites exist on the bench, it returns 404 (`no_sites_found`).
+
 ### Setup
 
 Every `/setup/*` route needs a session, like the rest of the API. The Admin password is set when the bench is created (`pilot new`), so there is no unauthenticated window: a browser reaches the wizard through the `?sid=` link that `pilot start` prints, or by signing in with that password. `POST /benches` returns a `setup_link` token for the same purpose.

@@ -899,3 +899,409 @@ def test_a_performance_section_maps_unsupported_engine_to_422(tmp_path: Path) ->
 
     assert response.status_code == 422
     assert response.get_json()["error"]["code"] == "performance_report_unavailable"
+
+
+def test_execute_query_single_site_replaces_macro(tmp_path: Path) -> None:
+    from pilot.core.database.base import QueryResult
+
+    bench_root = tmp_path / "benches" / "current"
+    client = _client(bench_root)
+    mock_db = Mock()
+    mock_db.execute.return_value = QueryResult(
+        columns=("Tenant", "count"),
+        rows=(("site1.local", 42),),
+        duration_ms=1.2,
+        truncated=False,
+        affected_rows=None,
+    )
+    with patch("pilot.core.database.make_site_database", return_value=mock_db):
+        response = client.post(
+            "/api/v1/database/queries",
+            json={
+                "site": "site1.local",
+                "query": "SELECT '${site}' AS Tenant, COUNT(*) FROM `tabLog`",
+                "read_only": True,
+            },
+        )
+
+    assert response.status_code == 200
+    mock_db.execute.assert_called_once_with(
+        "SELECT 'site1.local' AS Tenant, COUNT(*) FROM `tabLog`",
+        read_only=True,
+    )
+    data = response.get_json()
+    assert data["columns"] == ["Tenant", "count"]
+    assert data["rows"] == [["site1.local", 42]]
+    assert data["row_count"] == 1
+
+
+def test_execute_query_all_sites_executes_each_and_aggregates(tmp_path: Path) -> None:
+    from pilot.core.database.base import QueryResult
+
+    bench_root = tmp_path / "benches" / "current"
+    client = _client(bench_root)
+
+    for site_name in ("site1.local", "site2.local"):
+        site_dir = bench_root / "sites" / site_name
+        site_dir.mkdir(parents=True, exist_ok=True)
+        (site_dir / "site_config.json").write_text('{"db_name": "db_' + site_name + '"}')
+
+    executed_queries: dict[str, str] = {}
+
+    def _mock_make_db(root, site):
+        db = Mock()
+
+        def _exec(query, read_only=True):
+            executed_queries[site] = query
+            count = 10 if site == "site1.local" else 20
+            return QueryResult(
+                columns=("Tenant", "count"),
+                rows=((site, count),),
+                duration_ms=2.5,
+                truncated=False,
+                affected_rows=None,
+            )
+
+        db.execute.side_effect = _exec
+        return db
+
+    with patch("pilot.core.database.make_site_database", side_effect=_mock_make_db):
+        response = client.post(
+            "/api/v1/database/queries",
+            json={
+                "site": "all",
+                "query": "SELECT '${site}' AS Tenant, COUNT(*) FROM `tabLog`",
+                "read_only": True,
+            },
+        )
+
+    assert response.status_code == 200
+    assert executed_queries["site1.local"] == "SELECT 'site1.local' AS Tenant, COUNT(*) FROM `tabLog`"
+    assert executed_queries["site2.local"] == "SELECT 'site2.local' AS Tenant, COUNT(*) FROM `tabLog`"
+    data = response.get_json()
+    assert data["columns"] == ["Tenant", "count"]
+    assert data["rows"] == [["site1.local", 10], ["site2.local", 20]]
+    assert data["row_count"] == 2
+    assert data["duration_ms"] == 5.0
+
+
+def test_execute_query_all_sites_no_sites_returns_404(tmp_path: Path) -> None:
+    bench_root = tmp_path / "benches" / "current"
+    client = _client(bench_root)
+
+    response = client.post(
+        "/api/v1/database/queries",
+        json={"site": "all", "query": "SELECT 1", "read_only": True},
+    )
+
+    assert response.status_code == 404
+    assert response.get_json()["error"]["code"] == "no_sites_found"
+
+
+def test_get_schema_all_sites_returns_first_site_schema(tmp_path: Path) -> None:
+    bench_root = tmp_path / "benches" / "current"
+    client = _client(bench_root)
+
+    for site_name in ("site1.local", "site2.local"):
+        site_dir = bench_root / "sites" / site_name
+        site_dir.mkdir(parents=True, exist_ok=True)
+        (site_dir / "site_config.json").write_text('{"db_name": "db_' + site_name + '"}')
+
+    mock_db = Mock()
+    mock_db.get_schema.return_value = [{"name": "tabUser", "columns": []}]
+    with patch("pilot.core.database.make_site_database", return_value=mock_db) as make_db:
+        response = client.get("/api/v1/database/schema?site=all")
+
+    assert response.status_code == 200
+    assert response.get_json() == [{"name": "tabUser", "columns": []}]
+    make_db.assert_called_once_with(bench_root, "site1.local")
+
+
+def test_execute_query_all_sites_skips_missing_table(tmp_path: Path) -> None:
+    from pilot.core.database.base import QueryResult
+
+    bench_root = tmp_path / "benches" / "current"
+    client = _client(bench_root)
+
+    for site_name in ("site1.local", "site2.local"):
+        site_dir = bench_root / "sites" / site_name
+        site_dir.mkdir(parents=True, exist_ok=True)
+        (site_dir / "site_config.json").write_text('{"db_name": "db_' + site_name + '"}')
+
+    def _mock_make_db(root, site):
+        db = Mock()
+        if site == "site2.local":
+            db.execute.side_effect = DatabaseError(
+                "(1146, \"Table 'site2.tabIntegration Request' doesn't exist\")"
+            )
+        else:
+            db.execute.return_value = QueryResult(
+                columns=("Site", "Total_Calls"),
+                rows=(("site1.local", 15),),
+                duration_ms=1.5,
+                truncated=False,
+                affected_rows=None,
+            )
+        return db
+
+    with patch("pilot.core.database.make_site_database", side_effect=_mock_make_db):
+        response = client.post(
+            "/api/v1/database/queries",
+            json={
+                "site": "all",
+                "query": "SELECT '${site}' AS Site, COUNT(*) AS Total_Calls FROM `tabIntegration Request`",
+                "read_only": True,
+            },
+        )
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["columns"] == ["Site", "Total_Calls"]
+    assert data["rows"] == [["site1.local", 15]]
+    assert data["row_count"] == 1
+
+
+def test_execute_query_database_error_returns_422(tmp_path: Path) -> None:
+    bench_root = tmp_path / "benches" / "current"
+    client = _client(bench_root)
+    mock_db = Mock()
+    mock_db.execute.side_effect = DatabaseError("Unknown column 'foo' in 'field list'")
+
+    with patch("pilot.core.database.make_site_database", return_value=mock_db):
+        response = client.post(
+            "/api/v1/database/queries",
+            json={"site": "site1.local", "query": "SELECT foo", "read_only": True},
+        )
+
+    assert response.status_code == 422
+    assert "Unknown column 'foo'" in response.get_json()["error"]["message"]
+
+
+def test_execute_query_escaped_backticks_and_slash_site_macro(tmp_path: Path) -> None:
+    from pilot.core.database.base import QueryResult
+
+    bench_root = tmp_path / "benches" / "current"
+    client = _client(bench_root)
+    mock_db = Mock()
+    mock_db.execute.return_value = QueryResult(
+        columns=("Site", "count"),
+        rows=(("site1.local", 5),),
+        duration_ms=1.0,
+        truncated=False,
+        affected_rows=None,
+    )
+
+    with patch("pilot.core.database.make_site_database", return_value=mock_db):
+        response = client.post(
+            "/api/v1/database/queries",
+            json={
+                "site": "site1.local",
+                "query": r"SELECT '\${site}' AS Site, COUNT(*) FROM \`tabIntegration Request\`",
+                "read_only": True,
+            },
+        )
+
+    assert response.status_code == 200
+    mock_db.execute.assert_called_once_with(
+        "SELECT 'site1.local' AS Site, COUNT(*) FROM `tabIntegration Request`",
+        read_only=True,
+    )
+
+
+def test_execute_query_all_sites_skips_unreachable_site(tmp_path: Path) -> None:
+    from pilot.core.database.base import QueryResult
+
+    bench_root = tmp_path / "benches" / "current"
+    client = _client(bench_root)
+
+    for site_name in ("site1.local", "site2.local"):
+        site_dir = bench_root / "sites" / site_name
+        site_dir.mkdir(parents=True, exist_ok=True)
+        (site_dir / "site_config.json").write_text('{"db_name": "db_' + site_name + '"}')
+
+    def _mock_make_db(root, site):
+        if site == "site2.local":
+            raise DatabaseError("Could not connect to MariaDB: Access denied")
+        db = Mock()
+        db.execute.return_value = QueryResult(
+            columns=("Site", "count"),
+            rows=(("site1.local", 10),),
+            duration_ms=1.0,
+            truncated=False,
+            affected_rows=None,
+        )
+        return db
+
+    with patch("pilot.core.database.make_site_database", side_effect=_mock_make_db):
+        response = client.post(
+            "/api/v1/database/queries",
+            json={
+                "site": "all",
+                "query": "SELECT '${site}' AS Site, COUNT(*) FROM `tabLog`",
+                "read_only": True,
+            },
+        )
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["columns"] == ["Site", "count"]
+    assert data["rows"] == [["site1.local", 10]]
+    assert data["row_count"] == 1
+
+
+def test_execute_query_all_sites_bench_root_string_config(tmp_path: Path) -> None:
+    from pilot.core.database.base import QueryResult
+
+    bench_root = tmp_path / "benches" / "current"
+    client = _client(bench_root)
+    client.application.config["BENCH_ROOT"] = str(bench_root)
+
+    for site_name in ("site1.local",):
+        site_dir = bench_root / "sites" / site_name
+        site_dir.mkdir(parents=True, exist_ok=True)
+        (site_dir / "site_config.json").write_text('{"db_name": "db_' + site_name + '"}')
+
+    mock_db = Mock()
+    mock_db.execute.return_value = QueryResult(
+        columns=("count",),
+        rows=((1,),),
+        duration_ms=1.0,
+        truncated=False,
+        affected_rows=None,
+    )
+    with patch("pilot.core.database.make_site_database", return_value=mock_db):
+        response = client.post(
+            "/api/v1/database/queries",
+            json={"site": "all", "query": "SELECT 1", "read_only": True},
+        )
+
+    assert response.status_code == 200
+
+
+def test_execute_query_all_sites_aligns_reordered_columns(tmp_path: Path) -> None:
+    from pilot.core.database.base import QueryResult
+
+    bench_root = tmp_path / "benches" / "current"
+    client = _client(bench_root)
+
+    for site_name in ("site1.local", "site2.local"):
+        site_dir = bench_root / "sites" / site_name
+        site_dir.mkdir(parents=True, exist_ok=True)
+        (site_dir / "site_config.json").write_text('{"db_name": "db_' + site_name + '"}')
+
+    def _mock_make_db(root, site):
+        db = Mock()
+        if site == "site1.local":
+            db.execute.return_value = QueryResult(
+                columns=("col_a", "col_b"),
+                rows=(("val1_a", "val1_b"),),
+                duration_ms=1.0,
+            )
+        else:
+            db.execute.return_value = QueryResult(
+                columns=("col_b", "col_a"),
+                rows=(("val2_b", "val2_a"),),
+                duration_ms=1.0,
+            )
+        return db
+
+    with patch("pilot.core.database.make_site_database", side_effect=_mock_make_db):
+        response = client.post(
+            "/api/v1/database/queries",
+            json={"site": "all", "query": "SELECT * FROM `tabDoc`", "read_only": True},
+        )
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["columns"] == ["col_a", "col_b"]
+    assert data["rows"] == [["val1_a", "val1_b"], ["val2_a", "val2_b"]]
+
+
+def test_execute_query_all_sites_returns_failed_sites_on_partial_completion(tmp_path: Path) -> None:
+    from pilot.core.database.base import QueryResult
+
+    bench_root = tmp_path / "benches" / "current"
+    client = _client(bench_root)
+
+    for site_name in ("site1.local", "site2.local"):
+        site_dir = bench_root / "sites" / site_name
+        site_dir.mkdir(parents=True, exist_ok=True)
+        (site_dir / "site_config.json").write_text('{"db_name": "db_' + site_name + '"}')
+
+    def _mock_make_db(root, site):
+        db = Mock()
+        if site == "site1.local":
+            db.execute.return_value = QueryResult(
+                columns=(),
+                rows=(),
+                duration_ms=1.0,
+                affected_rows=1,
+            )
+        else:
+            db.execute.side_effect = DatabaseError("Deadlock found when trying to get lock")
+        return db
+
+    with patch("pilot.core.database.make_site_database", side_effect=_mock_make_db):
+        response = client.post(
+            "/api/v1/database/queries",
+            json={"site": "all", "query": "UPDATE `tabUser` SET enabled=1", "read_only": False},
+        )
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["affected_rows"] == 1
+    assert "failed_sites" in data
+    assert len(data["failed_sites"]) == 1
+    assert data["failed_sites"][0]["site"] == "site2.local"
+    assert "Deadlock" in data["failed_sites"][0]["error"]
+
+def test_execute_query_all_sites_fails_when_all_sites_have_database_errors(tmp_path: Path) -> None:
+    """Asserts that when all sites fail with database errors, the API returns a 422 with the first error message."""
+    bench_root = tmp_path / "benches" / "current"
+    client = _client(bench_root)
+
+    for site_name in ("site1.local", "site2.local"):
+        site_dir = bench_root / "sites" / site_name
+        site_dir.mkdir(parents=True, exist_ok=True)
+        (site_dir / "site_config.json").write_text('{"db_name": "db_' + site_name + '"}')
+
+    def _mock_make_db(root, site):
+        raise DatabaseError("Connection refused by MariaDB cluster node instance server")
+
+    with patch("pilot.core.database.make_site_database", side_effect=_mock_make_db):
+        response = client.post(
+            "/api/v1/database/queries",
+            json={"site": "all", "query": "SELECT * FROM `tabUser`;", "read_only": True},
+        )
+
+    assert response.status_code == 422
+    data = response.get_json()
+    assert data["error"]["code"] == "query_failed"
+    assert "Connection refused by MariaDB cluster node instance server" in data["error"]["message"]
+
+
+def test_execute_query_all_sites_fails_when_all_sites_have_missing_tables(tmp_path: Path) -> None:
+    """Asserts that when all sites report missing tables, the system raises a clean 422 exception response."""
+    bench_root = tmp_path / "benches" / "current"
+    client = _client(bench_root)
+
+    for site_name in ("site1.local", "site2.local"):
+        site_dir = bench_root / "sites" / site_name
+        site_dir.mkdir(parents=True, exist_ok=True)
+        (site_dir / "site_config.json").write_text('{"db_name": "db_' + site_name + '"}')
+
+    def _mock_make_db(root, site):
+        db = Mock()
+        db.execute.side_effect = DatabaseError("Error 1146: Table 'tabCustomApp' doesn't exist")
+        return db
+
+    with patch("pilot.core.database.make_site_database", side_effect=_mock_make_db):
+        response = client.post(
+            "/api/v1/database/queries",
+            json={"site": "all", "query": "SELECT * FROM `tabCustomApp`;", "read_only": True},
+        )
+
+    assert response.status_code == 422
+    data = response.get_json()
+    assert data["error"]["code"] == "query_failed"
+    assert "Table 'tabCustomApp' doesn't exist" in data["error"]["message"]

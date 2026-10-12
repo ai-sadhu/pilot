@@ -231,6 +231,26 @@ def test_postgres_connect_failure_surfaces_as_a_database_error() -> None:
         db.get_active_connections()
 
 
+def test_mariadb_connect_failure_surfaces_as_a_database_error() -> None:
+    """A raw pymysql error escaped _connect and reached the API as an opaque 500."""
+    import sys
+    import types
+
+    fake_pymysql = types.ModuleType("pymysql")
+    fake_pymysql.Error = type("Error", (Exception,), {})
+    fake_pymysql.connect = MagicMock(side_effect=fake_pymysql.Error("connection refused"))
+    fake_cursors = types.ModuleType("pymysql.cursors")
+    fake_cursors.DictCursor = object
+    fake_pymysql.cursors = fake_cursors
+
+    db = MariaDB(host="db.internal", port=3306, user="u", password="p", database="d")
+    with (
+        patch.dict(sys.modules, {"pymysql": fake_pymysql, "pymysql.cursors": fake_cursors}),
+        pytest.raises(DatabaseError, match="connection refused"),
+    ):
+        db._connect()
+
+
 def test_postgres_get_schema_uses_one_connection() -> None:
     db = PostgreSQL(host="h", port=5432, user="u", password="p", database="d")
     fake_cursor = MagicMock()
@@ -972,6 +992,34 @@ def test_make_site_database_defaults_to_mariadb(tmp_path: Path) -> None:
 def test_make_site_database_raises_for_missing_site(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="ghost"):
         make_site_database(tmp_path, "ghost")
+
+
+@pytest.mark.parametrize("missing_field", ["db_user", "db_password", "db_name"])
+def test_make_site_database_raises_for_missing_credentials(tmp_path: Path, missing_field: str) -> None:
+    config = {
+        "db_type": "mariadb",
+        "db_name": "mydb",
+        "db_user": "myuser",
+        "db_password": "mypw",
+    }
+    del config[missing_field]
+    _write_site_config(tmp_path, "broken.local", config)
+    with pytest.raises(DatabaseError, match="incomplete database configuration"):
+        make_site_database(tmp_path, "broken.local")
+
+
+@pytest.mark.parametrize("missing_field", ["db_user", "db_password", "db_name"])
+def test_make_site_database_postgres_raises_for_missing_credentials(tmp_path: Path, missing_field: str) -> None:
+    config = {
+        "db_type": "postgres",
+        "db_name": "pgdb",
+        "db_user": "pguser",
+        "db_password": "pgpw",
+    }
+    del config[missing_field]
+    _write_site_config(tmp_path, "broken_pg.local", config)
+    with pytest.raises(DatabaseError, match="incomplete database configuration"):
+        make_site_database(tmp_path, "broken_pg.local")
 
 
 @pytest.mark.parametrize(

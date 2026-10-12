@@ -23,13 +23,19 @@ class TableSchema(TypedDict):
     columns: list[TableColumn]
 
 
-class ExecutedQuery(TypedDict):
+class FailedSiteError(TypedDict):
+    site: str
+    error: str
+
+
+class ExecutedQuery(TypedDict, total=False):
     columns: list[str]
     rows: list[list[object]]
     row_count: int
     duration_ms: float
     truncated: bool
     affected_rows: int
+    failed_sites: list[FailedSiteError]
 
 
 class UnsupportedDatabaseDiagnostics(TypedDict):

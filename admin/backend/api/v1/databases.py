@@ -86,7 +86,7 @@ def _queue_configuration_change(
 
 @database_bp.get("/sites")
 def list_query_sites() -> ResponseReturnValue:
-    bench_root: Path = current_app.config["BENCH_ROOT"]
+    bench_root = Path(current_app.config["BENCH_ROOT"])
     sites_path = bench_root / "sites"
     if not sites_path.is_dir():
         return jsonify([])
@@ -109,12 +109,27 @@ def list_query_sites() -> ResponseReturnValue:
 
 @database_bp.get("/schema")
 def get_schema() -> ResponseReturnValue:
-    bench_root: Path = current_app.config["BENCH_ROOT"]
+    bench_root = Path(current_app.config["BENCH_ROOT"])
     site = request.args.get("site", "")
     if not site:
         return error_response("invalid_site", "Site is required.", 422)
     try:
         from pilot.core.database import make_site_database
+
+        if site == "all":
+            sites_path = bench_root / "sites"
+            site_dirs = (
+                sorted(
+                    d.name
+                    for d in sites_path.iterdir()
+                    if d.is_dir() and (d / "site_config.json").exists()
+                )
+                if sites_path.is_dir()
+                else []
+            )
+            if not site_dirs:
+                return error_response("no_sites_found", "No sites found on this bench.", 404)
+            return jsonify(make_site_database(bench_root, site_dirs[0]).get_schema())
 
         return jsonify(make_site_database(bench_root, site).get_schema())
     except FileNotFoundError:
@@ -125,7 +140,7 @@ def get_schema() -> ResponseReturnValue:
 
 @database_bp.post("/queries")
 def execute_query() -> ResponseReturnValue:
-    bench_root: Path = current_app.config["BENCH_ROOT"]
+    bench_root = Path(current_app.config["BENCH_ROOT"])
     data = request.get_json(silent=True)
 
     query_data, response = _query_request(data)
@@ -133,22 +148,20 @@ def execute_query() -> ResponseReturnValue:
         return response
 
     try:
-        from pilot.core.database import make_site_database
+        from pilot.core.database.query import execute_site_or_all_query
 
-        db = make_site_database(bench_root, query_data["site"])
-        result = db.execute(query_data["query"], read_only=query_data["read_only"])
-        return jsonify(
-            {
-                "columns": result.columns,
-                "rows": result.rows,
-                "row_count": len(result.rows),
-                "duration_ms": result.duration_ms,
-                "truncated": result.truncated,
-                "affected_rows": result.affected_rows,
-            }
+        result = execute_site_or_all_query(
+            bench_root,
+            query_data["site"],
+            query_data["query"],
+            read_only=query_data["read_only"],
         )
-    except FileNotFoundError:
-        return error_response("site_not_found", "Site was not found.", 404)
+        return jsonify(result)
+    except DatabaseError as exc:
+        return error_response("query_failed", str(exc), 422)
+    except FileNotFoundError as exc:
+        code = "no_sites_found" if query_data.get("site") == "all" else "site_not_found"
+        return error_response(code, str(exc), 404)
     except Exception:
         return error_response("query_failed", "Could not execute query.", 500)
 

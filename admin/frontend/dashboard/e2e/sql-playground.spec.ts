@@ -14,3 +14,10 @@ test('Opens the editor for a site', async ({ page }) => {
 
   await expect(page.getByRole('button', { name: 'Execute' })).toBeVisible()
 })
+
+test('Has All Sites option in the site dropdown', async ({ page }) => {
+  await page.goto('/database/sql-playground')
+
+  await page.getByRole('combobox').click()
+  await expect(page.getByRole('option', { name: 'All Sites' })).toBeVisible()
+})

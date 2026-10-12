@@ -944,14 +944,14 @@ def test_tune_to_host_refuses_external_server_before_writing(tmp_path) -> None:
     manager = MariaDBManager(MariaDBConfig(existing=True))
     with (
         patch(f"{MODULE}.is_macos", return_value=False),
-        patch.object(type(manager), "state_dir", new_callable=PropertyMock, return_value=tmp_path),
+        patch(f"{MODULE}.cli_root", return_value=tmp_path),
         patch.object(manager, "_restart_and_wait_healthy") as restart,
-        pytest.raises(DatabaseError, match="external MariaDB"),
     ):
-        manager.tune_to_host()
+        with pytest.raises(DatabaseError, match="external MariaDB"):
+            manager.tune_to_host()
 
-    assert not manager.my_cnf_path.exists()
-    restart.assert_not_called()
+        assert not manager.my_cnf_path.exists()
+        restart.assert_not_called()
 
 
 def test_is_provisioned_on_macos_checks_live_server_not_a_marker_file() -> None:
