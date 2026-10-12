@@ -14,7 +14,7 @@ def substitute_site_macro(query: str, site_name: str) -> str:
     # Matches optional slash-escaped backticks, spaces, and macro token sequences specifically
     cleaned = re.sub(r"\\?\$\{\s*site\s*\}", site_name, query, flags=re.IGNORECASE)
     cleaned = re.sub(r"\\?\$site\b", site_name, cleaned, flags=re.IGNORECASE)
-    return re.sub(r"\\`(.+?)\\`", r"`\1`", cleaned)
+    return cleaned
 
 
 def is_missing_table_error(message: str) -> bool:
