@@ -1103,7 +1103,7 @@ def test_execute_query_escaped_backticks_and_slash_site_macro(tmp_path: Path) ->
 
     assert response.status_code == 200
     mock_db.execute.assert_called_once_with(
-        "SELECT 'site1.local' AS Site, COUNT(*) FROM `tabIntegration Request`",
+        r"SELECT 'site1.local' AS Site, COUNT(*) FROM \`tabIntegration Request\`",
         read_only=True,
     )
 

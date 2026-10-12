@@ -10,24 +10,25 @@ from pilot.exceptions import DatabaseError
 
 
 def substitute_site_macro(query: str, site_name: str) -> str:
-    """Safely substitutes site macros without destructively changing unrelated SQL text details."""
-    # Matches optional slash-escaped backticks, spaces, and macro token sequences specifically
-    cleaned = re.sub(r"\\?\$\{\s*site\s*\}", site_name, query, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\\?\$site\b", site_name, cleaned, flags=re.IGNORECASE)
-    return cleaned
+    """Replace ${site} and $site macros with the site name."""
+    pattern = r"\\?\$\{\s*site\s*\}|\\?\$site\b"
+    return re.sub(pattern, site_name, query, flags=re.IGNORECASE)
 
 
 def is_missing_table_error(message: str) -> bool:
-    """Strictly evaluates if an error relates to a missing table, ignoring column mismatches."""
+    """Detects missing-table errors by error code or structured pattern."""
     low = message.lower()
-    if "column" in low:
-        return False
-    return (
-        "doesn't exist" in low
-        or ("relation" in low and "does not exist" in low)
-        or "no such table" in low
-        or "1146" in low
-    )
+    # MariaDB error 1146 / PostgreSQL "relation ... does not exist" / SQLite "no such table"
+    if re.search(r"\b1146\b", message):
+        return True
+    if "no such table" in low:
+        return True
+    if "relation" in low and "does not exist" in low:
+        return True
+    if "doesn't exist" in low and "column" not in low:
+        return True
+    return False
+
 
 
 def get_active_bench_sites(bench_root: Path) -> list[str]:
@@ -118,6 +119,19 @@ def _execute_single_site_safely(
             result = db.execute(site_query, read_only=read_only)
         except (json.JSONDecodeError, KeyError, AttributeError) as inner_exc:
             raise DatabaseError(f"Configuration profile layout crash: {inner_exc!s}") from inner_exc
+
+        state["columns"] = align_and_append_rows(
+            state["columns"],
+            state["rows"],
+            list(result.columns),
+            list(result.rows),
+            site_name,
+        )
+        state["duration_ms"] += result.duration_ms
+        if result.truncated:
+            state["truncated"] = True
+        if result.affected_rows is not None:
+            state["affected_rows"] += result.affected_rows
     except DatabaseError as exc:
         err_msg = str(exc)
         if read_only and is_missing_table_error(err_msg):
@@ -125,19 +139,6 @@ def _execute_single_site_safely(
         else:
             failed_sites.append({"site": site_name, "error": err_msg})
         return
-
-    state["columns"] = align_and_append_rows(
-        state["columns"],
-        state["rows"],
-        list(result.columns),
-        list(result.rows),
-        site_name,
-    )
-    state["duration_ms"] += result.duration_ms
-    if result.truncated:
-        state["truncated"] = True
-    if result.affected_rows is not None:
-        state["affected_rows"] += result.affected_rows
 
 
 def _execute_all_sites_query(bench_root: Path, query: str, read_only: bool) -> dict[str, Any]:

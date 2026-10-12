@@ -115,18 +115,10 @@ def get_schema() -> ResponseReturnValue:
         return error_response("invalid_site", "Site is required.", 422)
     try:
         from pilot.core.database import make_site_database
+        from pilot.core.database.query import get_active_bench_sites
 
         if site == "all":
-            sites_path = bench_root / "sites"
-            site_dirs = (
-                sorted(
-                    d.name
-                    for d in sites_path.iterdir()
-                    if d.is_dir() and (d / "site_config.json").exists()
-                )
-                if sites_path.is_dir()
-                else []
-            )
+            site_dirs = get_active_bench_sites(bench_root)
             if not site_dirs:
                 return error_response("no_sites_found", "No sites found on this bench.", 404)
             return jsonify(make_site_database(bench_root, site_dirs[0]).get_schema())

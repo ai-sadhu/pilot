@@ -232,7 +232,6 @@ def test_postgres_connect_failure_surfaces_as_a_database_error() -> None:
 
 
 def test_mariadb_connect_failure_surfaces_as_a_database_error() -> None:
-    """A raw pymysql error escaped _connect and reached the API as an opaque 500."""
     import sys
     import types
 

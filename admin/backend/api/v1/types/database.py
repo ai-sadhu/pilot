@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 from pilot.core.database.base import BinlogStatus, LockWaitStatus
 from pilot.core.database.configurations import DatabaseConfigurationEditor
@@ -28,14 +28,14 @@ class FailedSiteError(TypedDict):
     error: str
 
 
-class ExecutedQuery(TypedDict, total=False):
+class ExecutedQuery(TypedDict):
     columns: list[str]
     rows: list[list[object]]
     row_count: int
     duration_ms: float
     truncated: bool
     affected_rows: int
-    failed_sites: list[FailedSiteError]
+    failed_sites: NotRequired[list[FailedSiteError]]
 
 
 class UnsupportedDatabaseDiagnostics(TypedDict):
